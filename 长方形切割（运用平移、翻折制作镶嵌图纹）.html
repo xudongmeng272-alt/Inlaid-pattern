@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>图形切割矩阵版（直线＋圆＋真实曲线切割）</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, "Noto Sans SC",
+                 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f0f2f5;
+    touch-action: none;
+  }
+  .toolbar {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    background: #ffffff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    gap: 8px;
+    box-sizing: border-box;
+    user-select: none;
+  }
+  .toolbar button {
+    border: 1px solid #d9d9d9;
+    background: #fff;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .toolbar button.active {
+    background: #1677ff;
+    color: #fff;
+    border-color: #1677ff;
+  }
+  .toolbar button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .toolbar span.tip {
+    margin-left: 12px;
+    font-size: 13px;
+    color: #666;
+  }
+  .toolbar input[type="number"] {
+    width: 56px;
+    padding: 3px 6px;
+    font-size: 13px;
+    border-radius: 4px;
+    border: 1px solid #d9d9d9;
+  }
+  #wrapper {
+    display: flex;
+    gap: 12px;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .column {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .col-title {
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 4px;
+  }
+  canvas {
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px #d9d9d9;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button id="mode-move">拖动整体</button>
+  <button id="mode-cut">直线切割</button>
+  <button id="mode-circle">圆形切割</button>
+  <button id="mode-curve">曲线切割</button>
+
+  <button id="btn-add-eye">添加眼睛</button>
+
+  <button id="btn-move-left">← 左移</button>
+  <button id="btn-move-right">→ 右移</button>
+  <button id="btn-move-up">↑ 上移</button>
+  <button id="btn-move-down">↓ 下移</button>
+
+  <button id="btn-fold-ud">上下翻折</button>
+  <button id="btn-fold-lr">左右翻折</button>
+
+  <button id="btn-finish">结束作画</button>
+
+  <button id="btn-clone">克隆</button>
+  <button id="btn-clone-ud">上下翻折克隆</button>
+  <button id="btn-clone-lr">左右翻折克隆</button>
+  <button id="btn-clone-both">四方翻折克隆</button>
+
+  <button id="btn-undo">撤销</button>
+  <button id="btn-redo">恢复</button>
+
+  <span style="margin-left:8px;font-size:13px;color:#555;">初始长方形：</span>
+  宽格数
+  <input type="number" id="rectCols" value="16" min="4" max="30" />
+  高格数
+  <input type="number" id="rectRows" value="10" min="4" max="30" />
+  <button id="btn-resize-rect">重置长方形</button>
+
+  <span class="tip">
+    模式：<span id="mode-label">拖动整体</span>
+    ｜ 说明：碎片不能直接拖动，只能用箭头按钮＋点击选择平移
+  </span>
+</div>
+
+<div id="wrapper">
+  <div class="column">
+    <div class="col-title">左侧：作图区（650×720，网格）</div>
+    <canvas id="leftCanvas" width="650" height="720"></canvas>
+  </div>
+  <div class="column">
+    <div class="col-title">右侧：展示区（900×720，克隆结果）</div>
+    <canvas id="rightCanvas" width="900" height="720"></canvas>
+  </div>
+</div>
+
+<script>
+/* ===================
+   基本常量与画布
+   =================== */
+const GRID_STEP = 25;
+const CLONE_SCALE_LIMIT = 0.45;
+
+const leftCanvas  = document.getElementById('leftCanvas');
+const rightCanvas = document.getElementById('rightCanvas');
+const ctxLeft  = leftCanvas.getContext('2d');
+const ctxRight = rightCanvas.getContext('2d');
+
+leftCanvas.addEventListener('contextmenu', e => e.preventDefault());
+rightCanvas.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ===================
+   3×3 仿射矩阵
+   =================== */
+function matIdentity() { return [1,0,0, 0,1,0, 0,0,1]; }
+function matTranslate(dx, dy) { return [1,0,dx, 0,1,dy, 0,0,1]; }
+function matScale(sx, sy) { return [sx,0,0, 0,sy,0, 0,0,1]; }
+function matMultiply(A, B) {
+  return [
+    A[0]*B[0] + A[1]*B[3] + A[2]*B[6],
+    A[0]*B[1] + A[1]*B[4] + A[2]*B[7],
+    A[0]*B[2] + A[1]*B[5] + A[2]*B[8],
+
+    A[3]*B[0] + A[4]*B[3] + A[5]*B[6],
+    A[3]*B[1] + A[4]*B[4] + A[5]*B[7],
+    A[3]*B[2] + A[4]*B[5] + A[5]*B[8],
+
+    A[6]*B[0] + A[7]*B[3] + A[8]*B[6],
+    A[6]*B[1] + A[7]*B[4] + A[8]*B[7],
+    A[6]*B[2] + A[7]*B[5] + A[8]*B[8]
+  ];
+}
+function matCopy(M) { return M.slice(); }
+function applyMatrixToPoint(M, p) {
+  return { x: M[0]*p.x + M[1]*p.y + M[2], y: M[3]*p.x + M[4]*p.y + M[5] };
+}
+function matMirrorLRAbout(cx){ // 左右翻折：关于竖直中轴线 x=cx
+  return matMultiply(matTranslate(cx,0), matMultiply(matScale(-1,1), matTranslate(-cx,0)));
+}
+function matMirrorUDAbout(cy){ // 上下翻折：关于水平中轴线 y=cy
+  return matMultiply(matTranslate(0,cy), matMultiply(matScale(1,-1), matTranslate(0,-cy)));
+}
+
+/* ===================
+   颜色与工具函数
+   =================== */
+function randomLightColor() {
+  const r = 200 + Math.floor(Math.random()*55);
+  const g = 200 + Math.floor(Math.random()*55);
+  const b = 200 + Math.floor(Math.random()*55);
+  return `rgb(${r},${g},${b})`;
+}
+function randomDeepColor() {
+  const r = 60 + Math.floor(Math.random()*120);
+  const g = 60 + Math.floor(Math.random()*120);
+  const b = 60 + Math.floor(Math.random()*120);
+  return `rgb(${r},${g},${b})`;
+}
+function deepCopyPolygon(poly) { return poly.map(p => ({x:p.x, y:p.y})); }
+function deepCopyShape(shape) {
+  return { outer: deepCopyPolygon(shape.outer), holes: (shape.holes || []).map(h => deepCopyPolygon(h)) };
+}
+
+/* ===================
+   数据结构
+   =================== */
+let pieces = [];
+let nextGroupId = 1;
+let finishedGroupId = null;
+
+let leftEyes = [];
+let nextEyeId = 1;
+
+let rightClones = [];
+let nextCloneId = 1;
+
+let initialWidth  = 0;
+let initialHeight = 0;
+
+// “原图形中心”（随整体拖动更新；翻折轴使用它）
+let baseCenter = {x: 0, y: 0};
+
+// 两个翻折开关（按钮二次点击还原）
+let foldUDActive = false; // 上下翻折（对“左右移动过”的小块生效）
+let foldLRActive = false; // 左右翻折（对“上下移动过”的小块生效）
+
+/* ===================
+   撤销 / 恢复
+   =================== */
+let undoStack = [];
+let redoStack = [];
+
+function clonePiecesArray(src) {
+  return src.map(p => ({
+    original: deepCopyShape(p.original),
+    color: p.color,
+    groupId: p.groupId,
+    locked: p.locked,
+    fromCurve: p.fromCurve,
+    movedH: !!p.movedH,   // 左右移动过
+    movedV: !!p.movedV,   // 上下移动过
+    foldedUD: !!p.foldedUD, // 是否已经应用了“上下翻折”
+    foldedLR: !!p.foldedLR, // 是否已经应用了“左右翻折”
+    localTransform: matCopy(p.localTransform),
+    globalTransform: matCopy(p.globalTransform)
+  }));
+}
+function cloneEyesArray(src) {
+  return src.map(e => ({ id: e.id, x: e.x, y: e.y, r: e.r, groupId: e.groupId }));
+}
+function cloneClonesArray(src) {
+  return src.map(c => ({
+    id: c.id,
+    color: c.color,
+    shapes: c.shapes.map(deepCopyShape),
+    eyes: c.eyes.map(e => ({x:e.x,y:e.y,r:e.r}))
+  }));
+}
+function getState() {
+  return {
+    pieces: clonePiecesArray(pieces),
+    leftEyes: cloneEyesArray(leftEyes),
+    rightClones: cloneClonesArray(rightClones),
+    nextGroupId,
+    finishedGroupId,
+    nextEyeId,
+    nextCloneId,
+    initialWidth,
+    initialHeight,
+    baseCenter: {x: baseCenter.x, y: baseCenter.y},
+    foldUDActive,
+    foldLRActive
+  };
+}
+function applyState(st) {
+  pieces = clonePiecesArray(st.pieces || []);
+  leftEyes = cloneEyesArray(st.leftEyes || []);
+  rightClones = cloneClonesArray(st.rightClones || []);
+  nextGroupId = st.nextGroupId ?? 1;
+  finishedGroupId = (st.finishedGroupId !== undefined) ? st.finishedGroupId : null;
+  nextEyeId = st.nextEyeId ?? 1;
+  nextCloneId = st.nextCloneId ?? 1;
+  initialWidth  = st.initialWidth  ?? initialWidth;
+  initialHeight = st.initialHeight ?? initialHeight;
+  if (st.baseCenter) baseCenter = {x: st.baseCenter.x, y: st.baseCenter.y};
+  foldUDActive = !!st.foldUDActive;
+  foldLRActive = !!st.foldLRActive;
+
+  mode = 'move';
+  moveDirection = null;
+  updateModeButtons();
+  updateMoveDirButtons();
+  updateButtons();
+  drawLeft();
+  drawRight();
+}
+function saveState() {
+  undoStack.push(getState());
+  if (undoStack.length > 100) undoStack.shift();
+  redoStack = [];
+  updateButtons();
+}
+
+/* ===================
+   按钮和模式
+   =================== */
+const moveBtn   = document.getElementById('mode-move');
+const cutBtn    = document.getElementById('mode-cut');
+const circleBtn = document.getElementById('mode-circle');
+const curveBtn  = document.getElementById('mode-curve');
+
+const addEyeBtn = document.getElementById('btn-add-eye');
+
+const btnLeft  = document.getElementById('btn-move-left');
+const btnRight = document.getElementById('btn-move-right');
+const btnUp    = document.getElementById('btn-move-up');
+const btnDown  = document.getElementById('btn-move-down');
+
+const foldUDBtn = document.getElementById('btn-fold-ud');
+const foldLRBtn = document.getElementById('btn-fold-lr');
+
+const finishBtn   = document.getElementById('btn-finish');
+const cloneBtn    = document.getElementById('btn-clone');
+const cloneUDBtn  = document.getElementById('btn-clone-ud');
+const cloneLRBtn  = document.getElementById('btn-clone-lr');
+const cloneBothBtn= document.getElementById('btn-clone-both');
+
+const undoBtn     = document.getElementById('btn-undo');
+const redoBtn     = document.getElementById('btn-redo');
+const modeLabel   = document.getElementById('mode-label');
+
+const rectColsInput   = document.getElementById('rectCols');
+const rectRowsInput   = document.getElementById('rectRows');
+const resizeRectBtn   = document.getElementById('btn-resize-rect');
+
+let mode = 'move';
+let moveDirection = null;
+
+function updateModeButtons() {
+  moveBtn.classList.toggle('active', mode === 'move');
+  cutBtn.classList.toggle('active', mode === 'cut');
+  circleBtn.classList.toggle('active', mode === 'circle');
+  curveBtn.classList.toggle('active', mode === 'curve');
+  if (mode === 'move') modeLabel.textContent = '拖动整体 / 单块平移选择';
+  else if (mode === 'cut') modeLabel.textContent = '直线切割';
+  else if (mode === 'circle') modeLabel.textContent = '圆形切割';
+  else if (mode === 'curve') modeLabel.textContent = '曲线切割';
+}
+function updateMoveDirButtons() {
+  btnLeft.classList.toggle('active',  moveDirection === 'left');
+  btnRight.classList.toggle('active', moveDirection === 'right');
+  btnUp.classList.toggle('active',    moveDirection === 'up');
+  btnDown.classList.toggle('active',  moveDirection === 'down');
+}
+function updateFoldButtons(){
+  foldUDBtn.classList.toggle('active', foldUDActive);
+  foldLRBtn.classList.toggle('active', foldLRActive);
+}
+function updateButtons() {
+  undoBtn.disabled = undoStack.length === 0;
+  redoBtn.disabled = redoStack.length === 0;
+
+  const canClone = (finishedGroupId !== null);
+  cloneBtn.disabled = !canClone;
+  cloneUDBtn.disabled = !canClone;
+  cloneLRBtn.disabled = !canClone;
+  cloneBothBtn.disabled = !canClone;
+
+  updateFoldButtons();
+}
+
+moveBtn.onclick   = () => { mode='move'; updateModeButtons(); };
+cutBtn.onclick    = () => { mode='cut'; moveDirection=null; updateMoveDirButtons(); updateModeButtons(); };
+circleBtn.onclick = () => { mode='circle'; moveDirection=null; updateMoveDirButtons(); updateModeButtons(); };
+curveBtn.onclick  = () => { mode='curve'; moveDirection=null; updateMoveDirButtons(); updateModeButtons(); };
+
+function setMoveDir(dir) {
+  if (mode !== 'move') {
+    mode = 'move';
+    updateModeButtons();
+  }
+  moveDirection = (moveDirection === dir ? null : dir);
+  updateMoveDirButtons();
+}
+btnLeft.onclick  = () => setMoveDir('left');
+btnRight.onclick = () => setMoveDir('right');
+btnUp.onclick    = () => setMoveDir('up');
+btnDown.onclick  = () => setMoveDir('down');
+
+/* ===================
+   翻折开关：点一次应用，点一次还原（对所有符合移动的小块）
+   =================== */
+function applyFoldUDToAll(shouldOn){
+  const cy = baseCenter.y;
+  const M = matMirrorUDAbout(cy);
+
+  // 上下翻折对 movedH（左右移动过）的块生效
+  for (const p of pieces){
+    const qualifies = !!p.movedH;
+    if (!qualifies) continue;
+
+    if (shouldOn && !p.foldedUD){
+      p.globalTransform = matMultiply(M, p.globalTransform);
+      p.foldedUD = true;
+    } else if (!shouldOn && p.foldedUD){
+      p.globalTransform = matMultiply(M, p.globalTransform);
+      p.foldedUD = false;
+    }
+  }
+}
+function applyFoldLRToAll(shouldOn){
+  const cx = baseCenter.x;
+  const M = matMirrorLRAbout(cx);
+
+  // 左右翻折对 movedV（上下移动过）的块生效
+  for (const p of pieces){
+    const qualifies = !!p.movedV;
+    if (!qualifies) continue;
+
+    if (shouldOn && !p.foldedLR){
+      p.globalTransform = matMultiply(M, p.globalTransform);
+      p.foldedLR = true;
+    } else if (!shouldOn && p.foldedLR){
+      p.globalTransform = matMultiply(M, p.globalTransform);
+      p.foldedLR = false;
+    }
+  }
+}
+
+foldUDBtn.onclick = function(){
+  saveState();
+  foldUDActive = !foldUDActive;
+  applyFoldUDToAll(foldUDActive);
+  updateButtons();
+  drawLeft();
+};
+
+foldLRBtn.onclick = function(){
+  saveState();
+  foldLRActive = !foldLRActive;
+  applyFoldLRToAll(foldLRActive);
+  updateButtons();
+  drawLeft();
+};
+
+/* ===================
+   网格与绘制
+   =================== */
+function drawGridLeft(ctx) {
+  ctx.save();
+  ctx.strokeStyle = '#eeeeee';
+  ctx.lineWidth = 1;
+  for (let x=0; x<=leftCanvas.width; x+=GRID_STEP) {
+    ctx.beginPath();
+    ctx.moveTo(x+0.5,0);
+    ctx.lineTo(x+0.5,leftCanvas.height);
+    ctx.stroke();
+  }
+  for (let y=0; y<=leftCanvas.height; y+=GRID_STEP) {
+    ctx.beginPath();
+    ctx.moveTo(0,y+0.5);
+    ctx.lineTo(leftCanvas.width,y+0.5);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawGridRight(ctx) {
+  const step = GRID_STEP * 0.45;
+  ctx.save();
+  ctx.strokeStyle = '#f0f0f0';
+  ctx.lineWidth = 1;
+  for (let x=0; x<=rightCanvas.width; x+=step) {
+    ctx.beginPath();
+    ctx.moveTo(x+0.5,0);
+    ctx.lineTo(x+0.5,rightCanvas.height);
+    ctx.stroke();
+  }
+  for (let y=0; y<=rightCanvas.height; y+=step) {
+    ctx.beginPath();
+    ctx.moveTo(0,y+0.5);
+    ctx.lineTo(rightCanvas.width,y+0.5);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function getWorldShape(piece) {
+  const T = matMultiply(piece.globalTransform, piece.localTransform);
+  const outer = piece.original.outer.map(p => applyMatrixToPoint(T,p));
+  const holes = (piece.original.holes || []).map(hole =>
+    hole.map(p => applyMatrixToPoint(T,p))
+  );
+  return {outer, holes};
+}
+
+function drawShape(ctx, shape, color) {
+  const outer = shape.outer;
+  if (!outer || outer.length<3) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(outer[0].x,outer[0].y);
+  for (let i=1;i<outer.length;i++) ctx.lineTo(outer[i].x,outer[i].y);
+  ctx.closePath();
+  if (shape.holes && shape.holes.length) {
+    for (const hole of shape.holes) {
+      if (!hole.length) continue;
+      ctx.moveTo(hole[0].x,hole[0].y);
+      for (let i=1;i<hole.length;i++) ctx.lineTo(hole[i].x,hole[i].y);
+      ctx.closePath();
+    }
+  }
+  ctx.fillStyle = color;
+  ctx.fill('evenodd');
+  ctx.restore();
+}
+
+/* ===================
+   水平边吸附（消除克隆细线）
+   =================== */
+function snapHorizontalEdges(shape, eps = 0.25) {
+  const poly = shape.outer;
+  if (!poly || poly.length < 2) return;
+
+  const n = poly.length;
+  for (let iter = 0; iter < 2; iter++) {
+    for (let i = 0; i < n; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % n];
+      const dy = q.y - p.y;
+      if (Math.abs(dy) < eps) {
+        const avgY = (p.y + q.y) / 2;
+        p.y = avgY;
+        q.y = avgY;
+      }
+    }
+  }
+
+  if (shape.holes) {
+    for (const hole of shape.holes) {
+      const m = hole.length;
+      for (let iter = 0; iter < 2; iter++) {
+        for (let i = 0; i < m; i++) {
+          const p = hole[i];
+          const q = hole[(i + 1) % m];
+          const dy = q.y - p.y;
+          if (Math.abs(dy) < eps) {
+            const avgY = (p.y + q.y) / 2;
+            p.y = avgY;
+            q.y = avgY;
+          }
+        }
+      }
+    }
+  }
+}
+
+/* 眼睛贴纸 */
+const EYE_R = 12;
+const EYE_D = 16;
+function drawEyePair(ctx,x,y,r) {
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.beginPath();
+  ctx.arc(-EYE_D,0,r,0,Math.PI*2);
+  ctx.fillStyle='white';
+  ctx.fill();
+  ctx.lineWidth=1.5;
+  ctx.strokeStyle='#333';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(-EYE_D,0,r*0.5,0,Math.PI*2);
+  ctx.fillStyle='#000';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(EYE_D,0,r,0,Math.PI*2);
+  ctx.fillStyle='white';
+  ctx.fill();
+  ctx.lineWidth=1.5;
+  ctx.strokeStyle='#333';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(EYE_D,0,r*0.5,0,Math.PI*2);
+  ctx.fillStyle='#000';
+  ctx.fill();
+  ctx.restore();
+}
+
+/* 左画布 */
+function drawLeft(preview=null) {
+  ctxLeft.setTransform(1,0,0,1,0,0);
+  ctxLeft.clearRect(0,0,leftCanvas.width,leftCanvas.height);
+  drawGridLeft(ctxLeft);
+  for (const piece of pieces) {
+    const shape=getWorldShape(piece);
+    drawShape(ctxLeft,shape,piece.color);
+  }
+  for (const eye of leftEyes) drawEyePair(ctxLeft,eye.x,eye.y,eye.r);
+
+  if (preview) {
+    ctxLeft.save();
+    ctxLeft.strokeStyle='red';
+    ctxLeft.lineWidth=2;
+    ctxLeft.setLineDash([8,6]);
+    if (preview.type==='line' && preview.start && preview.end) {
+      ctxLeft.beginPath();
+      ctxLeft.moveTo(preview.start.x,preview.start.y);
+      ctxLeft.lineTo(preview.end.x,preview.end.y);
+      ctxLeft.stroke();
+    } else if (preview.type==='circle' && preview.center && preview.radius>0) {
+      ctxLeft.beginPath();
+      ctxLeft.arc(preview.center.x,preview.center.y,preview.radius,0,Math.PI*2);
+      ctxLeft.stroke();
+    } else if (preview.type==='curve' && preview.points && preview.points.length>1) {
+      ctxLeft.beginPath();
+      ctxLeft.moveTo(preview.points[0].x,preview.points[0].y);
+      for (let i=1;i<preview.points.length;i++) ctxLeft.lineTo(preview.points[i].x,preview.points[i].y);
+      ctxLeft.stroke();
+    }
+    ctxLeft.setLineDash([]);
+    ctxLeft.restore();
+  }
+}
+
+/* 右画布 */
+function drawRight() {
+  ctxRight.setTransform(1,0,0,1,0,0);
+  ctxRight.clearRect(0,0,rightCanvas.width,rightCanvas.height);
+  drawGridRight(ctxRight);
+  for (const c of rightClones) {
+    for (const s of c.shapes) drawShape(ctxRight,s,c.color);
+    for (const e of c.eyes) drawEyePair(ctxRight,e.x,e.y,e.r);
+  }
+}
+
+/* ===================
+   初始矩形
+   =================== */
+function createInitialRect(cols, rows) {
+  cols = cols || parseInt(rectColsInput.value, 10) || 16;
+  rows = rows || parseInt(rectRowsInput.value, 10) || 10;
+
+  cols = Math.max(2, Math.min(30, cols));
+  rows = Math.max(2, Math.min(30, rows));
+
+  rectColsInput.value = cols;
+  rectRowsInput.value = rows;
+
+  const w = cols * GRID_STEP;
+  const h = rows * GRID_STEP;
+  initialWidth  = w;
+  initialHeight = h;
+
+  const cx = leftCanvas.width  / 2;
+  const cy = leftCanvas.height / 2;
+
+  let x0 = cx - w / 2;
+  let y0 = cy - h / 2;
+  x0 = Math.round(x0 / GRID_STEP) * GRID_STEP;
+  y0 = Math.round(y0 / GRID_STEP) * GRID_STEP;
+
+  const rect = [
+    {x:x0,     y:y0},
+    {x:x0 + w, y:y0},
+    {x:x0 + w, y:y0 + h},
+    {x:x0,     y:y0 + h}
+  ];
+
+  baseCenter = { x: x0 + w/2, y: y0 + h/2 };
+
+  foldUDActive = false;
+  foldLRActive = false;
+
+  pieces = [{
+    original:{outer:rect,holes:[]},
+    color: randomLightColor(),
+    groupId: 0,
+    locked:false,
+    fromCurve:false,
+    movedH:false,
+    movedV:false,
+    foldedUD:false,
+    foldedLR:false,
+    localTransform:matIdentity(),
+    globalTransform:matIdentity()
+  }];
+
+  leftEyes=[];
+  rightClones=[];
+  finishedGroupId=null;
+  undoStack=[];
+  redoStack=[];
+  moveDirection=null;
+  mode='move';
+
+  updateModeButtons();
+  updateMoveDirButtons();
+  updateButtons();
+  drawLeft();
+  drawRight();
+}
+resizeRectBtn.onclick = function() {
+  const cols = parseInt(rectColsInput.value, 10) || 16;
+  const rows = parseInt(rectRowsInput.value, 10) || 10;
+  createInitialRect(cols, rows);
+};
+
+/* ===================
+   几何工具
+   =================== */
+function pointInPolygon(pt, poly) {
+  let inside=false;
+  for (let i=0,j=poly.length-1;i<poly.length;j=i++) {
+    const xi=poly[i].x, yi=poly[i].y;
+    const xj=poly[j].x, yj=poly[j].y;
+    const intersect=((yi>pt.y)!==(yj>pt.y)) &&
+      (pt.x < (xj - xi)*(pt.y - yi)/((yj - yi)||1e-12) + xi);
+    if (intersect) inside=!inside;
+  }
+  return inside;
+}
+function pointInShape(pt,shape) {
+  if (!pointInPolygon(pt,shape.outer)) return false;
+  if (shape.holes) for (const h of shape.holes) if (pointInPolygon(pt,h)) return false;
+  return true;
+}
+function polygonArea(poly) {
+  let a=0;
+  for (let i=0,j=poly.length-1;i<poly.length;j=i++) a += (poly[j].x*poly[i].y - poly[i].x*poly[j].y);
+  return Math.abs(a)/2;
+}
+function signedArea(poly) {
+  let a=0;
+  for (let i=0,j=poly.length-1;i<poly.length;j=i++) a += (poly[j].x*poly[i].y - poly[i].x*poly[j].y);
+  return a/2;
+}
+function ensureCCW(poly) {
+  if (poly.length<3) return poly;
+  if (signedArea(poly) < 0) poly.reverse();
+  return poly;
+}
+function cross(ax,ay,bx,by) { return ax*by - ay*bx; }
+
+function clipPolygonWithLine(poly,A,B,keepPositive) {
+  const res=[];
+  const ABx=B.x-A.x, ABy=B.y-A.y;
+  const EPS=1e-9;
+  function inside(d){return keepPositive ? d>=-EPS : d<=EPS;}
+  const n=poly.length;
+  for (let i=0;i<n;i++) {
+    const P=poly[i];
+    const Q=poly[(i+1)%n];
+    const dP=cross(ABx,ABy,P.x-A.x,P.y-A.y);
+    const dQ=cross(ABx,ABy,Q.x-A.x,Q.y-A.y);
+    const inP=inside(dP), inQ=inside(dQ);
+    if (inP && inQ) {
+      res.push({x:Q.x,y:Q.y});
+    } else if (inP && !inQ) {
+      const t=dP/(dP-dQ);
+      res.push({x:P.x + t*(Q.x-P.x), y:P.y + t*(Q.y-P.y)});
+    } else if (!inP && inQ) {
+      const t=dP/(dP-dQ);
+      res.push({x:P.x + t*(Q.x-P.x), y:P.y + t*(Q.y-P.y)});
+      res.push({x:Q.x,y:Q.y});
+    }
+  }
+  return res;
+}
+function clipPolygonWithConvex(subject,clipPoly) {
+  let out=subject;
+  for (let i=0;i<clipPoly.length;i++) {
+    const A=clipPoly[i];
+    const B=clipPoly[(i+1)%clipPoly.length];
+    out = clipPolygonWithLine(out,A,B,true);
+    if (out.length<3) break;
+  }
+  return out;
+}
+function approximateCircle(center,r,seg=96) {
+  const pts=[];
+  for (let i=0;i<seg;i++) {
+    const t=2*Math.PI*i/seg;
+    pts.push({x:center.x+r*Math.cos(t),y:center.y+r*Math.sin(t)});
+  }
+  return pts;
+}
+
+/* ===================
+   RDP 曲线简化
+   =================== */
+function rdp(points, epsilon) {
+  if (points.length <= 2) return points.slice();
+  const first = 0;
+  const last  = points.length - 1;
+  const stack = [[first, last]];
+  const keep  = new Array(points.length).fill(false);
+  keep[first] = keep[last] = true;
+
+  while (stack.length) {
+    const [start, end] = stack.pop();
+    let maxDist = -1;
+    let index   = -1;
+
+    const A = points[start];
+    const B = points[end];
+    const ABx = B.x - A.x;
+    const ABy = B.y - A.y;
+    const denom = Math.sqrt(ABx*ABx + ABy*ABy) || 1e-12;
+
+    for (let i=start+1; i<end; i++) {
+      const P = points[i];
+      const num = Math.abs((P.x - A.x)*ABy - (P.y - A.y)*ABx);
+      const dist = num / denom;
+      if (dist > maxDist) { maxDist = dist; index = i; }
+    }
+
+    if (maxDist > epsilon && index !== -1) {
+      keep[index] = true;
+      stack.push([start,index], [index,end]);
+    }
+  }
+
+  const result=[];
+  for (let i=0;i<points.length;i++) if (keep[i]) result.push(points[i]);
+  return result;
+}
+
+/* ===================
+   直线 / 圆切割
+   =================== */
+function cutByLine(A,B) {
+  const newPieces=[];
+  const EPS=1e-6;
+  for (const piece of pieces) {
+    if (piece.locked) { newPieces.push(piece); continue; }
+
+    const worldShape=getWorldShape(piece);
+    const outer=worldShape.outer;
+    if (!outer || outer.length<3) { newPieces.push(piece); continue; }
+
+    let hasPos=false, hasNeg=false;
+    const ABx=B.x-A.x, ABy=B.y-A.y;
+    for (const P of outer) {
+      const d=cross(ABx,ABy,P.x-A.x,P.y-A.y);
+      if (d> EPS) hasPos=true;
+      if (d<-EPS) hasNeg=true;
+    }
+    if (!(hasPos && hasNeg)) { newPieces.push(piece); continue; }
+
+    const outer1=clipPolygonWithLine(outer,A,B,true);
+    const outer2=clipPolygonWithLine(outer,A,B,false);
+    const area1=polygonArea(outer1);
+    const area2=polygonArea(outer2);
+
+    function clipHoles(keepPos) {
+      const res=[];
+      for (const hole of worldShape.holes) {
+        const h=clipPolygonWithLine(hole,A,B,keepPos);
+        if (h.length>=3 && polygonArea(h)>1) res.push(h);
+      }
+      return res;
+    }
+
+    const commonFlags = {
+      movedH: piece.movedH,
+      movedV: piece.movedV,
+      foldedUD: piece.foldedUD,
+      foldedLR: piece.foldedLR
+    };
+
+    if (outer1.length>=3 && area1>1) {
+      newPieces.push({
+        original:{outer:outer1,holes:clipHoles(true)},
+        color:piece.color, groupId:piece.groupId, locked:false,
+        fromCurve:piece.fromCurve,
+        ...commonFlags,
+        localTransform:matIdentity(), globalTransform:matIdentity()
+      });
+    }
+    if (outer2.length>=3 && area2>1) {
+      newPieces.push({
+        original:{outer:outer2,holes:clipHoles(false)},
+        color:piece.color, groupId:piece.groupId, locked:false,
+        fromCurve:piece.fromCurve,
+        ...commonFlags,
+        localTransform:matIdentity(), globalTransform:matIdentity()
+      });
+    }
+  }
+  pieces=newPieces;
+}
+function cutByConvex(convexPoly, fromCurveFlag) {
+  const newPieces=[];
+  const minArea=1;
+  for (const piece of pieces) {
+    if (piece.locked) { newPieces.push(piece); continue; }
+
+    const worldShape=getWorldShape(piece);
+    const outer=worldShape.outer;
+    if (!outer || outer.length<3) { newPieces.push(piece); continue; }
+
+    const clipped=clipPolygonWithConvex(outer,convexPoly);
+    const areaInside=polygonArea(clipped);
+
+    const commonFlags = {
+      movedH: piece.movedH,
+      movedV: piece.movedV,
+      foldedUD: piece.foldedUD,
+      foldedLR: piece.foldedLR
+    };
+
+    if (clipped.length>=3 && areaInside>minArea) {
+      newPieces.push({
+        original:{
+          outer: outer.slice(),
+          holes: worldShape.holes.map(h=>h.slice()).concat([clipped.slice()])
+        },
+        color:piece.color, groupId:piece.groupId, locked:false,
+        fromCurve:piece.fromCurve || !!fromCurveFlag,
+        ...commonFlags,
+        localTransform:matIdentity(), globalTransform:matIdentity()
+      });
+
+      newPieces.push({
+        original:{outer:clipped.slice(),holes:[]},
+        color:piece.color, groupId:piece.groupId, locked:false,
+        fromCurve:piece.fromCurve || !!fromCurveFlag,
+        ...commonFlags,
+        localTransform:matIdentity(), globalTransform:matIdentity()
+      });
+    } else {
+      newPieces.push(piece);
+    }
+  }
+  pieces=newPieces;
+}
+function cutByCircle(center,r) {
+  const poly=approximateCircle(center,r,96);
+  cutByConvex(poly,false);
+}
+
+/* ===================
+   曲线精确切割
+   =================== */
+function segmentIntersect(p1,p2,p3,p4) {
+  const x1=p1.x, y1=p1.y, x2=p2.x, y2=p2.y;
+  const x3=p3.x, y3=p3.y, x4=p4.x, y4=p4.y;
+
+  const dx12 = x2 - x1, dy12 = y2 - y1;
+  const dx34 = x4 - x3, dy34 = y4 - y3;
+
+  const denom = dx12 * dy34 - dy12 * dx34;
+  if (Math.abs(denom) < 1e-9) return null;
+
+  const dx13 = x1 - x3, dy13 = y1 - y3;
+
+  const t = (dx34 * dy13 - dy34 * dx13) / denom;
+  const u = (dx12 * dy13 - dy12 * dx13) / denom;
+
+  if (t < -1e-6 || t > 1+1e-6 || u < -1e-6 || u > 1+1e-6) return null;
+
+  return { tOnPoly: t, u, point: { x: x1 + t * dx12, y: y1 + t * dy12 } };
+}
+function boundaryPathCCW(edgeA, edgeB, outer) {
+  const n = outer.length;
+  const res=[];
+  let idx=(edgeA+1)%n;
+  while (true) {
+    res.push(outer[idx]);
+    if (idx===edgeB) break;
+    idx=(idx+1)%n;
+  }
+  return res;
+}
+function splitPolygonWithStroke(outer, holes, stroke) {
+  const n = outer.length;
+  if (n < 3 || stroke.length < 2) return null;
+
+  const intersections = [];
+  for (let j=0;j<n;j++) {
+    const P1 = outer[j];
+    const P2 = outer[(j+1)%n];
+    for (let k=0;k<stroke.length-1;k++) {
+      const Q1 = stroke[k];
+      const Q2 = stroke[k+1];
+      const inter = segmentIntersect(P1,P2,Q1,Q2);
+      if (inter) {
+        const curveS = k + inter.u;
+        intersections.push({
+          edgeIndex: j,
+          curveIndex: k,
+          tOnPoly: inter.tOnPoly,
+          curveS,
+          point: inter.point
+        });
+      }
+    }
+  }
+  if (intersections.length < 2) return null;
+
+  intersections.sort((a,b)=>a.curveS - b.curveS);
+  const filtered=[];
+  const EPS2 = 0.25;
+  for (const it of intersections) {
+    if (!filtered.length) filtered.push(it);
+    else {
+      const prev = filtered[filtered.length-1];
+      const dx = it.point.x - prev.point.x;
+      const dy = it.point.y - prev.point.y;
+      if (dx*dx + dy*dy > EPS2) filtered.push(it);
+    }
+  }
+  if (filtered.length !== 2) return null;
+
+  const I0 = filtered[0];
+  const I1 = filtered[1];
+
+  function buildSubCurvePoints() {
+    const pts=[];
+    pts.push(I0.point);
+    const startK = I0.curveIndex;
+    const endK   = I1.curveIndex;
+    for (let k=startK+1;k<=endK;k++) pts.push(stroke[k]);
+    pts.push(I1.point);
+    const clean=[];
+    for (const p of pts) {
+      if (!clean.length) clean.push(p);
+      else {
+        const q=clean[clean.length-1];
+        const dx=p.x-q.x, dy=p.y-q.y;
+        if (dx*dx+dy*dy>EPS2) clean.push(p);
+      }
+    }
+    return clean;
+  }
+
+  const subCurve = buildSubCurvePoints();
+  if (subCurve.length < 2) return null;
+
+  const e0 = I0.edgeIndex;
+  const e1 = I1.edgeIndex;
+
+  let polyA, polyB;
+
+  if (e0 === e1) {
+    const pathAround = boundaryPathCCW(e0, e0, outer);
+    polyA = [I0.point, ...subCurve.slice(1), I1.point, ...pathAround];
+    ensureCCW(polyA);
+
+    const rev = subCurve.slice().reverse();
+    polyB = [I1.point, ...rev.slice(1), I0.point];
+    ensureCCW(polyB);
+  } else {
+    const pathCW  = boundaryPathCCW(e1,e0,outer);
+    const pathCCW = boundaryPathCCW(e0,e1,outer);
+
+    polyA = [I0.point, ...subCurve.slice(1), I1.point, ...pathCW];
+    ensureCCW(polyA);
+
+    const revCurve = subCurve.slice().reverse();
+    polyB = [I1.point, ...revCurve.slice(1), I0.point, ...pathCCW];
+    ensureCCW(polyB);
+  }
+
+  const areaA = polygonArea(polyA);
+  const areaB = polygonArea(polyB);
+  if (areaA < 1 || areaB < 1) return null;
+
+  const holesA = [];
+  const holesB = [];
+  if (holes && holes.length) {
+    for (const h of holes) {
+      if (!h.length) continue;
+      const testPt = h[0];
+      if (pointInPolygon(testPt, polyA)) holesA.push(h);
+      else if (pointInPolygon(testPt, polyB)) holesB.push(h);
+    }
+  }
+
+  return [
+    { outer: polyA, holes: holesA },
+    { outer: polyB, holes: holesB }
+  ];
+}
+function cutByCurvePoints(points) {
+  if (points.length < 3) return;
+  const stroke = rdp(points, 1.0);
+  if (stroke.length < 3) return;
+
+  const newPieces = [];
+  for (const piece of pieces) {
+    if (piece.locked) { newPieces.push(piece); continue; }
+
+    const worldShape = getWorldShape(piece);
+    const result = splitPolygonWithStroke(worldShape.outer, worldShape.holes, stroke);
+    if (!result) {
+      newPieces.push(piece);
+    } else {
+      for (const shp of result) {
+        newPieces.push({
+          original: {outer: shp.outer, holes: shp.holes},
+          color: piece.color,
+          groupId: piece.groupId,
+          locked: false,
+          fromCurve: true,
+          movedH: piece.movedH,
+          movedV: piece.movedV,
+          foldedUD: piece.foldedUD,
+          foldedLR: piece.foldedLR,
+          localTransform: matIdentity(),
+          globalTransform: matIdentity()
+        });
+      }
+    }
+  }
+  pieces = newPieces;
+}
+
+/* ===================
+   单块按钮平移（左右也少移1像素）
+   =================== */
+function movePieceByRect(piece, direction) {
+  if (!piece || !direction) return;
+  if (!initialWidth || !initialHeight) return;
+
+  let dx=0, dy=0;
+
+  if (direction==='left' || direction==='right') {
+    let stepX = initialWidth - 2;
+    if (stepX < 1) stepX = 2;
+    dx = (direction==='left') ? -stepX : stepX;
+    piece.movedH = true;
+  }
+
+  if (direction==='up' || direction==='down') {
+    let stepY = initialHeight - 2;
+    if (stepY < 2) stepY=2;
+    dy = (direction==='up') ? -stepY : stepY;
+    piece.movedV = true;
+  }
+
+  const T=matTranslate(dx,dy);
+  piece.localTransform = matMultiply(T,piece.localTransform);
+  piece.locked = true;
+
+  // 如果翻折开关已开启，则该块一旦满足条件就立刻按翻折后处理
+  if (piece.movedH && foldUDActive && !piece.foldedUD) {
+    const M = matMirrorUDAbout(baseCenter.y);
+    piece.globalTransform = matMultiply(M, piece.globalTransform);
+    piece.foldedUD = true;
+  }
+  if (piece.movedV && foldLRActive && !piece.foldedLR) {
+    const M = matMirrorLRAbout(baseCenter.x);
+    piece.globalTransform = matMultiply(M, piece.globalTransform);
+    piece.foldedLR = true;
+  }
+}
+
+/* ===================
+   眼睛 / 克隆 / 结束
+   =================== */
+addEyeBtn.onclick=function(){
+  if (!pieces.length) return;
+  saveState();
+  const cx=leftCanvas.width/2;
+  const cy=leftCanvas.height/2;
+  const gid=pieces[0].groupId;
+  leftEyes.push({ id:nextEyeId++, x:cx, y:cy, r:EYE_R, groupId:gid });
+  drawLeft();
+};
+
+finishBtn.onclick=function(){
+  if (!pieces.length) return;
+  saveState();
+  finishedGroupId=pieces[0].groupId;
+  updateButtons();
+};
+
+function mirrorShapeLR(shape, cx){
+  const out = deepCopyShape(shape);
+  for (const p of out.outer) p.x = 2*cx - p.x;
+  for (const h of out.holes) for (const p of h) p.x = 2*cx - p.x;
+  return out;
+}
+function mirrorShapeUD(shape, cy){
+  const out = deepCopyShape(shape);
+  for (const p of out.outer) p.y = 2*cy - p.y;
+  for (const h of out.holes) for (const p of h) p.y = 2*cy - p.y;
+  return out;
+}
+
+function cloneGroupToRight({forceUD=false, forceLR=false}={}) {
+  if (finishedGroupId===null) return;
+
+  const basePieces=pieces.filter(p=>p.groupId===finishedGroupId);
+  const baseEyes  =leftEyes.filter(e=>e.groupId===finishedGroupId);
+  if (!basePieces.length) return;
+
+  const cx0 = baseCenter.x;
+  const cy0 = baseCenter.y;
+
+  // 整体翻折：对整个图形都生效
+  const worldShapes = [];
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+
+  for (const p of basePieces) {
+    let s = getWorldShape(p);
+
+    if (forceUD) s = mirrorShapeUD(s, cy0); // 整体上下翻折
+    if (forceLR) s = mirrorShapeLR(s, cx0); // 整体左右翻折
+
+    worldShapes.push(s);
+
+    for (const pt of s.outer) {
+      if (pt.x<minX) minX=pt.x;
+      if (pt.y<minY) minY=pt.y;
+      if (pt.x>maxX) maxX=pt.x;
+      if (pt.y>maxY) maxY=pt.y;
+    }
+    for (const h of s.holes) {
+      for (const pt of h) {
+        if (pt.x<minX) minX=pt.x;
+        if (pt.y<minY) minY=pt.y;
+        if (pt.x>maxX) maxX=pt.x;
+        if (pt.y>maxY) maxY=pt.y;
+      }
+    }
+  }
+
+  // 眼睛：也跟随整体翻折
+  const eyesWorld = [];
+  for (const e of baseEyes) {
+    let ex = e.x, ey = e.y;
+    if (forceUD) ey = 2*cy0 - ey;
+    if (forceLR) ex = 2*cx0 - ex;
+    eyesWorld.push({ x: ex, y: ey, r: e.r });
+
+    if (ex-e.r<minX) minX=ex-e.r;
+    if (ey-e.r<minY) minY=ey-e.r;
+    if (ex+e.r>maxX) maxX=ex+e.r;
+    if (ey+e.r>maxY) maxY=ey+e.r;
+  }
+
+  const w=maxX-minX, h=maxY-minY;
+  if (w<=0 || h<=0) return;
+
+  const cx=(minX+maxX)/2;
+  const cy=(minY+maxY)/2;
+
+  const margin=0.7;
+  const sx=rightCanvas.width*margin/w;
+  const sy=rightCanvas.height*margin/h;
+  const scale=Math.min(sx,sy,CLONE_SCALE_LIMIT);
+
+  const targetCx=rightCanvas.width/2;
+  const targetCy=rightCanvas.height/2;
+
+  const newColor=randomDeepColor();
+  const shapes=[];
+  const eyes=[];
+
+  for (const s of worldShapes) {
+    const newOuter=s.outer.map(p=>{
+      const lx=p.x-cx, ly=p.y-cy;
+      return {x:targetCx+lx*scale, y:targetCy+ly*scale};
+    });
+    const newHoles=s.holes.map(hole =>
+      hole.map(p=>{
+        const lx=p.x-cx, ly=p.y-cy;
+        return {x:targetCx+lx*scale, y:targetCy+ly*scale};
+      })
+    );
+
+    const shapeObj = {outer:newOuter, holes:newHoles};
+    snapHorizontalEdges(shapeObj, 0.25);
+    shapes.push(shapeObj);
+  }
+
+  for (const e of eyesWorld) {
+    const lx=e.x-cx, ly=e.y-cy;
+    eyes.push({ x:targetCx+lx*scale, y:targetCy+ly*scale, r:e.r*scale });
+  }
+
+  rightClones.push({ id:nextCloneId++, color:newColor, shapes, eyes });
+  drawRight();
+}
+
+cloneBtn.onclick=function(){
+  if (finishedGroupId===null) return;
+  saveState();
+  cloneGroupToRight({forceUD:false, forceLR:false});
+  updateButtons();
+};
+
+cloneUDBtn.onclick=function(){
+  if (finishedGroupId===null) return;
+  saveState();
+  cloneGroupToRight({forceUD:true, forceLR:false});
+  updateButtons();
+};
+
+cloneLRBtn.onclick=function(){
+  if (finishedGroupId===null) return;
+  saveState();
+  cloneGroupToRight({forceUD:false, forceLR:true});
+  updateButtons();
+};
+
+cloneBothBtn.onclick=function(){
+  if (finishedGroupId===null) return;
+  saveState();
+  cloneGroupToRight({forceUD:true, forceLR:true});
+  updateButtons();
+};
+
+undoBtn.onclick=function(){
+  if (!undoStack.length) return;
+  const cur=getState();
+  const prev=undoStack.pop();
+  redoStack.push(cur);
+  applyState(prev);
+};
+redoBtn.onclick=function(){
+  if (!redoStack.length) return;
+  const cur=getState();
+  const next=redoStack.pop();
+  undoStack.push(cur);
+  applyState(next);
+};
+
+/* ===================
+   Pointer 事件（触控屏必备）
+   =================== */
+function getCanvasPos(evt, canvas) {
+  const r = canvas.getBoundingClientRect();
+  const sx = canvas.width / r.width;
+  const sy = canvas.height / r.height;
+  return { x: (evt.clientX - r.left) * sx, y: (evt.clientY - r.top) * sy };
+}
+function preventIfNeeded(evt){
+  if (evt.cancelable) evt.preventDefault();
+}
+
+let leftPointerDown=false;
+let leftPointerId=null;
+
+let dragGroupId=null;
+let dragLast={x:0,y:0};
+
+let cutStart=null, cutEnd=null;
+let circleCenter=null, circleRadius=0;
+let curvePoints=[];
+
+function hitEye(pos) {
+  for (let i=leftEyes.length-1;i>=0;i--) {
+    const e=leftEyes[i];
+    const dx=pos.x-e.x, dy=pos.y-e.y;
+    if (dx*dx+dy*dy <= (e.r*1.4)*(e.r*1.4)) return e;
+  }
+  return null;
+}
+function findTopPieceAt(pos) {
+  for (let i=pieces.length-1;i>=0;i--) {
+    const shape=getWorldShape(pieces[i]);
+    if (pointInShape(pos,shape)) return pieces[i];
+  }
+  return null;
+}
+
+leftCanvas.addEventListener('pointerdown',(evt)=>{
+  preventIfNeeded(evt);
+  leftPointerDown=true;
+  leftPointerId=evt.pointerId;
+  leftCanvas.setPointerCapture(leftPointerId);
+
+  const pos=getCanvasPos(evt,leftCanvas);
+
+  // 单块平移
+  if (mode==='move' && moveDirection) {
+    const piece=findTopPieceAt(pos);
+    if (piece) {
+      saveState();
+      movePieceByRect(piece,moveDirection);
+      drawLeft();
+      updateButtons();
+    }
+    moveDirection=null;
+    updateMoveDirButtons();
+    return;
+  }
+
+  if (mode==='move') {
+    const eye=hitEye(pos);
+    if (eye) {
+      saveState();
+      dragGroupId='eye:'+eye.id;
+      dragLast=pos;
+      return;
+    }
+    const piece=findTopPieceAt(pos);
+    if (piece) {
+      saveState();
+      dragGroupId=piece.groupId;
+      dragLast=pos;
+    }
+  } else if (mode==='cut') {
+    cutStart=pos; cutEnd=pos;
+    drawLeft({type:'line',start:cutStart,end:cutEnd});
+  } else if (mode==='circle') {
+    circleCenter=pos; circleRadius=0;
+    drawLeft({type:'circle',center:circleCenter,radius:circleRadius});
+  } else if (mode==='curve') {
+    curvePoints=[pos];
+    drawLeft({type:'curve',points:curvePoints});
+  }
+},{passive:false});
+
+leftCanvas.addEventListener('pointermove',(evt)=>{
+  if (!leftPointerDown) return;
+  if (leftPointerId!==null && evt.pointerId!==leftPointerId) return;
+  preventIfNeeded(evt);
+
+  const pos=getCanvasPos(evt,leftCanvas);
+
+  if (mode==='move') {
+    if (!dragGroupId) return;
+    const dx=pos.x-dragLast.x;
+    const dy=pos.y-dragLast.y;
+    dragLast=pos;
+
+    if (typeof dragGroupId==='string' && dragGroupId.startsWith('eye:')) {
+      const id=parseInt(dragGroupId.slice(4),10);
+      const eye=leftEyes.find(e=>e.id===id);
+      if (eye) {eye.x+=dx;eye.y+=dy;}
+    } else {
+      for (const p of pieces) {
+        if (p.groupId===dragGroupId) {
+          const T=matTranslate(dx,dy);
+          p.globalTransform=matMultiply(T,p.globalTransform);
+        }
+      }
+      for (const e of leftEyes) {
+        if (e.groupId===dragGroupId) { e.x+=dx; e.y+=dy; }
+      }
+      baseCenter.x += dx;
+      baseCenter.y += dy;
+    }
+    drawLeft();
+  } else if (mode==='cut') {
+    if (cutStart) { cutEnd=pos; drawLeft({type:'line',start:cutStart,end:cutEnd}); }
+  } else if (mode==='circle') {
+    if (circleCenter) {
+      const dx=pos.x-circleCenter.x, dy=pos.y-circleCenter.y;
+      circleRadius=Math.sqrt(dx*dx+dy*dy);
+      drawLeft({type:'circle',center:circleCenter,radius:circleRadius});
+    }
+  } else if (mode==='curve') {
+    if (curvePoints.length) {
+      const last=curvePoints[curvePoints.length-1];
+      const dx=pos.x-last.x, dy=pos.y-last.y;
+      if (dx*dx+dy*dy>6) {
+        curvePoints.push(pos);
+        drawLeft({type:'curve',points:curvePoints});
+      } else {
+        const tmp=curvePoints.slice();
+        tmp.push(pos);
+        drawLeft({type:'curve',points:tmp});
+      }
+    }
+  }
+},{passive:false});
+
+function endLeftPointer(evt){
+  if (!leftPointerDown) return;
+  if (leftPointerId!==null && evt.pointerId!==leftPointerId) return;
+  preventIfNeeded(evt);
+
+  if (mode==='cut' && cutStart && cutEnd) {
+    const dx=cutEnd.x-cutStart.x, dy=cutEnd.y-cutStart.y;
+    if (dx*dx+dy*dy>100) {
+      saveState();
+      cutByLine(cutStart,cutEnd);
+      updateButtons();
+    }
+    cutStart=null; cutEnd=null;
+    drawLeft();
+  } else if (mode==='circle' && circleCenter && circleRadius>0) {
+    if (circleRadius*circleRadius>100) {
+      saveState();
+      cutByCircle(circleCenter,circleRadius);
+      updateButtons();
+    }
+    circleCenter=null; circleRadius=0;
+    drawLeft();
+  } else if (mode==='curve' && curvePoints.length>1) {
+    if (curvePoints.length>5) {
+      saveState();
+      cutByCurvePoints(curvePoints);
+      updateButtons();
+    }
+    curvePoints=[];
+    drawLeft();
+  }
+
+  leftPointerDown=false;
+  leftPointerId=null;
+  dragGroupId=null;
+}
+leftCanvas.addEventListener('pointerup', endLeftPointer, {passive:false});
+leftCanvas.addEventListener('pointercancel', endLeftPointer, {passive:false});
+leftCanvas.addEventListener('pointerleave', endLeftPointer, {passive:false});
+
+/* ===================
+   右侧拖动克隆整体（Pointer 版）
+   =================== */
+let rightPointerDown=false;
+let rightPointerId=null;
+let dragClone=null;
+let dragRightLast={x:0,y:0};
+
+function hitClone(pos) {
+  for (let i=rightClones.length-1;i>=0;i--) {
+    const c=rightClones[i];
+    for (const s of c.shapes) if (pointInShape(pos,s)) return c;
+  }
+  return null;
+}
+
+rightCanvas.addEventListener('pointerdown',(evt)=>{
+  preventIfNeeded(evt);
+  const pos=getCanvasPos(evt,rightCanvas);
+  const c=hitClone(pos);
+  if (c) {
+    saveState();
+    rightPointerDown=true;
+    rightPointerId=evt.pointerId;
+    rightCanvas.setPointerCapture(rightPointerId);
+    dragClone=c;
+    dragRightLast=pos;
+  }
+},{passive:false});
+
+rightCanvas.addEventListener('pointermove',(evt)=>{
+  if (!rightPointerDown || !dragClone) return;
+  if (rightPointerId!==null && evt.pointerId!==rightPointerId) return;
+  preventIfNeeded(evt);
+
+  const pos=getCanvasPos(evt,rightCanvas);
+  const dx=pos.x-dragRightLast.x;
+  const dy=pos.y-dragRightLast.y;
+  dragRightLast=pos;
+
+  for (const s of dragClone.shapes) {
+    for (const p of s.outer) {p.x+=dx;p.y+=dy;}
+    for (const h of s.holes) for (const p of h) {p.x+=dx;p.y+=dy;}
+  }
+  for (const e of dragClone.eyes) { e.x+=dx; e.y+=dy; }
+  drawRight();
+},{passive:false});
+
+function endRightPointer(evt){
+  if (!rightPointerDown) return;
+  if (rightPointerId!==null && evt.pointerId!==rightPointerId) return;
+  preventIfNeeded(evt);
+  rightPointerDown=false;
+  rightPointerId=null;
+  dragClone=null;
+}
+rightCanvas.addEventListener('pointerup', endRightPointer, {passive:false});
+rightCanvas.addEventListener('pointercancel', endRightPointer, {passive:false});
+rightCanvas.addEventListener('pointerleave', endRightPointer, {passive:false});
+
+/* ===================
+   启动
+   =================== */
+createInitialRect(16,10);
+</script>
+</body>
+</html>

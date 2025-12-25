@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>三角形框架 + 曲线生成</title>
+  <style>
+    html,body{height:100%;}
+    body{
+      margin:0;background:#fff;color:#000;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+      display:flex;justify-content:center;align-items:stretch;
+      overscroll-behavior:none;
+    }
+    .wrap{
+      width:min(1700px,99vw);
+      margin:10px auto;
+      display:grid;
+      grid-template-columns: 300px 1fr;
+      gap:10px;
+      height: calc(100vh - 20px);
+    }
+
+    .panel{
+      border:1px solid #000;border-radius:14px;
+      padding:10px;overflow:auto;background:#fff;
+    }
+    .panel .btns{display:flex;flex-direction:column;gap:10px;margin-bottom:10px;}
+    .btn{
+      border:1.5px solid #000;border-radius:12px;
+      padding:12px 10px;background:#fff;color:#000;
+      font-size:15px;cursor:pointer;text-align:left;user-select:none;
+    }
+    .btn.selected{background:#000;color:#fff;}
+
+    .section{
+      border:1px solid #000;border-radius:14px;
+      padding:10px;display:flex;flex-direction:column;gap:10px;margin-bottom:10px;
+    }
+    .action{
+      border:1.5px solid #000;border-radius:12px;
+      padding:12px 10px;background:#fff;color:#000;
+      font-size:15px;cursor:pointer;user-select:none;
+    }
+    .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .action:disabled{opacity:.35;cursor:not-allowed;}
+
+    .slider{
+      border:1px solid #000;border-radius:12px;
+      padding:10px;display:flex;flex-direction:column;gap:8px;
+    }
+    .slider .top{display:flex;justify-content:space-between;align-items:center;font-size:13px;}
+    .slider input[type="range"]{width:100%;}
+
+    .stageWrap{
+      display:flex;flex-direction:column;gap:10px;
+      min-width: 0;
+    }
+
+    .topbar{
+      border:1px solid #000;border-radius:14px;
+      padding:10px;background:#fff;
+      display:flex;justify-content:space-between;align-items:center;
+      gap:10px;
+    }
+    .rotCtl{
+      display:flex;align-items:center;gap:10px;min-width: 0;
+    }
+    .rotCtl input[type="range"]{width:260px;max-width:40vw;}
+    .rotCtl input[type="number"]{
+      width:90px;border:1px solid #000;border-radius:10px;
+      padding:8px 10px;font-size:14px;
+    }
+    .nudge{display:flex;gap:6px;}
+    .miniBtn{
+      border:1.5px solid #000;border-radius:10px;
+      padding:8px 10px;background:#fff;color:#000;
+      cursor:pointer;user-select:none;font-size:14px;
+    }
+    .miniBtn:disabled{opacity:.35;cursor:not-allowed;}
+    .miniBtn.selected{background:#000;color:#fff;}
+
+    .stage{
+      border:1px solid #000;border-radius:14px;
+      overflow:hidden;background:#fff;position:relative;
+      min-height: 660px;flex:1;
+      touch-action:none;
+      -webkit-user-select:none; user-select:none;
+    }
+    svg{width:100%;height:100%;display:block; touch-action:none;}
+
+    .hidden{display:none !important;}
+
+    @media (max-width: 980px){
+      .wrap{grid-template-columns:1fr; height:auto;}
+      .stage{height:72vh; min-height:72vh;}
+      .topbar{flex-wrap:wrap;justify-content:flex-start;}
+      .rotCtl input[type="range"]{width: min(520px, 80vw);}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div id="panelDraw">
+        <div class="btns" id="frameBtns">
+          <button class="btn selected" data-deg="60">60°</button>
+          <button class="btn" data-deg="90">90°</button>
+          <button class="btn" data-deg="120">120°</button>
+        </div>
+
+        <div class="section">
+          <button class="action" id="genWaist">生成候选曲线</button>
+          <div class="row2">
+            <button class="action" id="adoptWaist" disabled>采用</button>
+            <button class="action" id="discardWaist" disabled>丢弃</button>
+          </div>
+          <button class="action" id="rotateWaist" disabled>旋转到另一腰</button>
+
+          <div class="slider">
+            <div class="top"><span>弯曲幅度</span><span id="vAmpW"></span></div>
+            <input id="ampW" type="range" min="0.00" max="0.35" step="0.01" value="0.18">
+          </div>
+          <div class="slider">
+            <div class="top"><span>沿腰扰动</span><span id="vAlongW"></span></div>
+            <input id="alongW" type="range" min="0.00" max="0.12" step="0.01" value="0.03">
+          </div>
+          <div class="slider">
+            <div class="top"><span>控制点数量</span><span id="vPtsW"></span></div>
+            <input id="ptsW" type="range" min="3" max="7" step="1" value="4">
+          </div>
+          <div class="slider">
+            <div class="top"><span>平滑系数</span><span id="vSmoothW"></span></div>
+            <input id="smoothW" type="range" min="0.40" max="1.60" step="0.05" value="1.00">
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="action" id="genBase">生成底边曲线</button>
+
+          <div class="slider">
+            <div class="top"><span>弯曲幅度</span><span id="vAmpB"></span></div>
+            <input id="ampB" type="range" min="0.00" max="0.35" step="0.01" value="0.16">
+          </div>
+          <div class="slider">
+            <div class="top"><span>控制点数量</span><span id="vPtsB"></span></div>
+            <input id="ptsB" type="range" min="3" max="7" step="1" value="4">
+          </div>
+          <div class="slider">
+            <div class="top"><span>平滑系数</span><span id="vSmoothB"></span></div>
+            <input id="smoothB" type="range" min="0.40" max="1.60" step="0.05" value="1.00">
+          </div>
+        </div>
+      </div>
+
+      <div id="panelFinish" class="hidden">
+        <div class="section">
+          <button class="action" id="cloneBtn">克隆</button>
+          <button class="action" id="rotCloneBtn">旋转克隆</button>
+          <div id="rotChoices" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stageWrap">
+      <div class="topbar" id="topbar">
+        <div class="rotCtl" id="rotCtl">
+          <input id="rotRange" type="range" min="-180" max="180" step="1" value="0">
+          <input id="rotNumber" type="number" min="-180" max="180" step="1" value="0">
+          <div class="nudge">
+            <button class="miniBtn" id="rotDown">-</button>
+            <button class="miniBtn" id="rotUp">+</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="miniBtn" id="undoBtn" disabled>撤销</button>
+          <button class="miniBtn" id="redoBtn" disabled>恢复</button>
+          <button class="miniBtn" id="finishBtn">结束作画</button>
+        </div>
+      </div>
+
+      <div class="stage">
+        <svg id="svg" viewBox="0 0 1650 720" aria-label="triangle frame">
+          <g id="drawLayer">
+            <g id="world">
+              <line id="baseDash" x1="0" y1="0" x2="0" y2="0"
+                    stroke="#000" stroke-width="7" stroke-dasharray="14 14" opacity="0.85" />
+              <line id="leftSideDash"  x1="0" y1="0" x2="0" y2="0"
+                    stroke="#000" stroke-width="6" stroke-dasharray="14 14" opacity="0.75" />
+              <line id="rightSideDash" x1="0" y1="0" x2="0" y2="0"
+                    stroke="#000" stroke-width="6" stroke-dasharray="14 14" opacity="0.75" />
+
+              <path id="solidLeft" d="" fill="none" stroke="#000" stroke-width="7"
+                    stroke-linecap="round" stroke-linejoin="round" style="display:none;" />
+              <path id="solidRightClone" d="" fill="none" stroke="#000" stroke-width="7"
+                    stroke-linecap="round" stroke-linejoin="round" style="display:none;" />
+              <path id="candWaist" d="" fill="none" stroke="#000" stroke-width="6"
+                    stroke-dasharray="14 14" opacity="0.95"
+                    stroke-linecap="round" stroke-linejoin="round" style="display:none;" />
+
+              <path id="baseLeftSolid" d="" fill="none" stroke="#000" stroke-width="7"
+                    stroke-linecap="round" stroke-linejoin="round" style="display:none;" />
+              <path id="baseRightClone" d="" fill="none" stroke="#000" stroke-width="7"
+                    stroke-linecap="round" stroke-linejoin="round" style="display:none;" />
+
+              <circle id="apexDot" cx="0" cy="0" r="7" fill="#000"></circle>
+              <circle id="leftDot" cx="0" cy="0" r="6" fill="#000" opacity="0.6"></circle>
+              <circle id="rightDot" cx="0" cy="0" r="6" fill="#000" opacity="0.6"></circle>
+            </g>
+          </g>
+
+          <g id="finishedLayer" class="hidden"></g>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- DOM ----------
+    const frameBtns = Array.from(document.querySelectorAll('#frameBtns .btn'));
+
+    const genWaistBtn = document.getElementById('genWaist');
+    const adoptWaistBtn = document.getElementById('adoptWaist');
+    const discardWaistBtn = document.getElementById('discardWaist');
+    const rotateWaistBtn = document.getElementById('rotateWaist');
+    const genBaseBtn = document.getElementById('genBase');
+
+    const ampW = document.getElementById('ampW');
+    const alongW = document.getElementById('alongW');
+    const ptsW = document.getElementById('ptsW');
+    const smoothW = document.getElementById('smoothW');
+
+    const ampB = document.getElementById('ampB');
+    const ptsB = document.getElementById('ptsB');
+    const smoothB = document.getElementById('smoothB');
+
+    const vAmpW = document.getElementById('vAmpW');
+    const vAlongW = document.getElementById('vAlongW');
+    const vPtsW = document.getElementById('vPtsW');
+    const vSmoothW = document.getElementById('vSmoothW');
+    const vAmpB = document.getElementById('vAmpB');
+    const vPtsB = document.getElementById('vPtsB');
+    const vSmoothB = document.getElementById('vSmoothB');
+
+    const rotRange = document.getElementById('rotRange');
+    const rotNumber = document.getElementById('rotNumber');
+    const rotUp = document.getElementById('rotUp');
+    const rotDown = document.getElementById('rotDown');
+
+    const undoBtn = document.getElementById('undoBtn');
+    const redoBtn = document.getElementById('redoBtn');
+    const finishBtn = document.getElementById('finishBtn');
+
+    const panelDraw = document.getElementById('panelDraw');
+    const panelFinish = document.getElementById('panelFinish');
+    const rotCtl = document.getElementById('rotCtl');
+
+    const cloneBtn = document.getElementById('cloneBtn');
+    const rotCloneBtn = document.getElementById('rotCloneBtn');
+    const rotChoices = document.getElementById('rotChoices');
+
+    const svg = document.getElementById('svg');
+    const world = document.getElementById('world');
+    const drawLayer = document.getElementById('drawLayer');
+    const finishedLayer = document.getElementById('finishedLayer');
+
+    const baseDashEl = document.getElementById('baseDash');
+    const leftSideDashEl = document.getElementById('leftSideDash');
+    const rightSideDashEl = document.getElementById('rightSideDash');
+
+    const solidLeftEl = document.getElementById('solidLeft');
+    const solidRightCloneEl = document.getElementById('solidRightClone');
+    const candWaistEl = document.getElementById('candWaist');
+
+    const baseLeftSolidEl = document.getElementById('baseLeftSolid');
+    const baseRightCloneEl = document.getElementById('baseRightClone');
+
+    const apexDot  = document.getElementById('apexDot');
+    const leftDot  = document.getElementById('leftDot');
+    const rightDot = document.getElementById('rightDot');
+
+    // ---------- geometry ----------
+    const SVG_W = 1650, SVG_H = 720;
+    const CENTER = {x: SVG_W/2, y: SVG_H/2};
+    const M = 70;
+    const BASE0 = 1150;
+
+    let apexDeg = 60;
+
+    let P_apex = {x:0,y:0};
+    let P_left = {x:0,y:0};
+    let P_right = {x:0,y:0};
+    let P_mid = {x:0,y:0};
+
+    function deg2rad(d){ return d * Math.PI / 180; }
+
+    function computeTriangle(Adeg){
+      const A = Adeg;
+      const half0 = BASE0/2;
+      const h0 = half0 / Math.tan(deg2rad(A/2));
+
+      const s = Math.min((SVG_W - 2*M) / BASE0, (SVG_H - 2*M) / h0);
+      const L = BASE0 * s;
+      const h = h0 * s;
+      const half = L/2;
+
+      const cx = CENTER.x;
+      const cy = CENTER.y;
+
+      const baseY = cy + h/2;
+      const apexY = cy - h/2;
+
+      P_left  = {x: cx - half, y: baseY};
+      P_right = {x: cx + half, y: baseY};
+      P_apex  = {x: cx,        y: apexY};
+      P_mid   = {x: cx,        y: baseY};
+    }
+
+    function setFrame(){
+      baseDashEl.setAttribute('x1', P_left.x);
+      baseDashEl.setAttribute('y1', P_left.y);
+      baseDashEl.setAttribute('x2', P_right.x);
+      baseDashEl.setAttribute('y2', P_right.y);
+
+      leftSideDashEl.setAttribute('x1', P_apex.x);
+      leftSideDashEl.setAttribute('y1', P_apex.y);
+      leftSideDashEl.setAttribute('x2', P_left.x);
+      leftSideDashEl.setAttribute('y2', P_left.y);
+
+      rightSideDashEl.setAttribute('x1', P_apex.x);
+      rightSideDashEl.setAttribute('y1', P_apex.y);
+      rightSideDashEl.setAttribute('x2', P_right.x);
+      rightSideDashEl.setAttribute('y2', P_right.y);
+
+      apexDot.setAttribute('cx', P_apex.x); apexDot.setAttribute('cy', P_apex.y);
+      leftDot.setAttribute('cx', P_left.x); leftDot.setAttribute('cy', P_left.y);
+      rightDot.setAttribute('cx', P_right.x); rightDot.setAttribute('cy', P_right.y);
+    }
+
+    // ---------- vector helpers ----------
+    function norm(v){
+      const len = Math.hypot(v.x, v.y) || 1;
+      return {x: v.x/len, y: v.y/len};
+    }
+    function add(a,b){ return {x:a.x+b.x, y:a.y+b.y}; }
+    function sub(a,b){ return {x:a.x-b.x, y:a.y-b.y}; }
+    function mul(a,s){ return {x:a.x*s, y:a.y*s}; }
+    function dot(a,b){ return a.x*b.x + a.y*b.y; }
+
+    // PRNG
+    function mulberry32(seed){
+      let t = seed >>> 0;
+      return function(){
+        t += 0x6D2B79F5;
+        let x = Math.imul(t ^ (t >>> 15), 1 | t);
+        x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    // Catmull-Rom -> Bezier
+    function catmullRomToBezier(points, smoothFactor){
+      if (points.length < 2) return "";
+      const k = smoothFactor / 6;
+      let d = `M ${points[0].x} ${points[0].y}`;
+      for (let i = 0; i < points.length - 1; i++){
+        const p0 = points[i - 1] || points[i];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[i + 2] || p2;
+
+        const c1 = add(p1, mul(sub(p2, p0), k));
+        const c2 = sub(p2, mul(sub(p3, p1), k));
+        d += ` C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`;
+      }
+      return d;
+    }
+
+    // ---------- path transforms ----------
+    function parsePathTokens(d){
+      const tokens = [];
+      const re = /([a-zA-Z])|([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)/g;
+      let m;
+      while ((m = re.exec(d)) !== null){
+        if (m[1]) tokens.push({type:'cmd', v:m[1]});
+        else tokens.push({type:'num', v:Number(m[2])});
+      }
+      return tokens;
+    }
+    function rebuildPathFromTokens(tokens){
+      let out = "";
+      for (const t of tokens){
+        if (t.type === 'cmd') out += (out ? " " : "") + t.v;
+        else out += " " + (Math.round(t.v * 1000) / 1000);
+      }
+      return out.trim();
+    }
+
+    function transformPointBySegment(p, A_old, B_old, A_new, B_new){
+      const vOld = sub(B_old, A_old);
+      const lenOld = Math.hypot(vOld.x, vOld.y) || 1;
+      const uOld = {x: vOld.x/lenOld, y: vOld.y/lenOld};
+      const nOld = {x: -uOld.y, y: uOld.x};
+
+      const rel = sub(p, A_old);
+      const alpha = dot(rel, uOld) / lenOld;
+      const beta  = dot(rel, nOld) / lenOld;
+
+      const vNew = sub(B_new, A_new);
+      const lenNew = Math.hypot(vNew.x, vNew.y) || 1;
+      const uNew = {x: vNew.x/lenNew, y: vNew.y/lenNew};
+      const nNew = {x: -uNew.y, y: uNew.x};
+
+      const along = mul(vNew, alpha);
+      const perp  = mul(nNew, beta * lenNew);
+      return add(A_new, add(along, perp));
+    }
+
+    function transformPathBySegment(d, A_old, B_old, A_new, B_new){
+      const tokens = parsePathTokens(d);
+      const numIdx = [];
+      for (let i=0;i<tokens.length;i++) if (tokens[i].type==='num') numIdx.push(i);
+      if (numIdx.length % 2 !== 0) return d;
+
+      for (let k=0;k<numIdx.length;k+=2){
+        const i1 = numIdx[k];
+        const i2 = numIdx[k+1];
+        const pNew = transformPointBySegment(
+          {x: tokens[i1].v, y: tokens[i2].v},
+          A_old, B_old, A_new, B_new
+        );
+        tokens[i1].v = pNew.x;
+        tokens[i2].v = pNew.y;
+      }
+      return rebuildPathFromTokens(tokens);
+    }
+
+    function rotatePoint(p, center, angRad){
+      const x = p.x - center.x;
+      const y = p.y - center.y;
+      const c = Math.cos(angRad), s = Math.sin(angRad);
+      return {x: center.x + x*c - y*s, y: center.y + x*s + y*c};
+    }
+
+    function rotatePath(d, center, angRad){
+      const tokens = parsePathTokens(d);
+      const numIdx = [];
+      for (let i=0;i<tokens.length;i++) if (tokens[i].type==='num') numIdx.push(i);
+      if (numIdx.length % 2 !== 0) return d;
+
+      for (let k=0;k<numIdx.length;k+=2){
+        const i1 = numIdx[k];
+        const i2 = numIdx[k+1];
+        const pNew = rotatePoint({x: tokens[i1].v, y: tokens[i2].v}, center, angRad);
+        tokens[i1].v = pNew.x;
+        tokens[i2].v = pNew.y;
+      }
+      return rebuildPathFromTokens(tokens);
+    }
+
+    // ---------- curve builders ----------
+    function buildCurveWithAlong(A, B, settings, randData){
+      const v = sub(B, A);
+      const u = norm(v);
+      const n = {x: -u.y, y: u.x};
+
+      const segLen = Math.hypot(v.x, v.y);
+      const amp = segLen * settings.amp;
+      const alongAmp = segLen * settings.along;
+
+      const count = settings.points;
+      const pts = [A];
+      for (let i=0;i<count;i++){
+        const t = (i+1) / (count+1);
+        const onSeg = add(A, mul(v, t));
+        const rn = randData[i]?.rn ?? 0;
+        const rt = randData[i]?.rt ?? 0;
+        pts.push(add(add(onSeg, mul(n, rn * amp)), mul(u, rt * alongAmp)));
+      }
+      pts.push(B);
+      return catmullRomToBezier(pts, settings.smooth);
+    }
+
+    function buildCurveNoAlong(A, B, settings, randData){
+      const v = sub(B, A);
+      const u = norm(v);
+      const n = {x: -u.y, y: u.x};
+
+      const segLen = Math.hypot(v.x, v.y);
+      const amp = segLen * settings.amp;
+
+      const count = settings.points;
+      const pts = [A];
+      for (let i=0;i<count;i++){
+        const t = (i+1) / (count+1);
+        const onSeg = add(A, mul(v, t));
+        const rn = randData[i]?.rn ?? 0;
+        pts.push(add(onSeg, mul(n, rn * amp)));
+      }
+      pts.push(B);
+      return catmullRomToBezier(pts, settings.smooth);
+    }
+
+    function waistSettings(){
+      return { amp:+ampW.value, along:+alongW.value, points:+ptsW.value, smooth:+smoothW.value };
+    }
+    function baseSettings(){
+      return { amp:+ampB.value, points:+ptsB.value, smooth:+smoothB.value };
+    }
+
+    function refreshLabels(){
+      vAmpW.textContent = `${Math.round(+ampW.value*100)}%`;
+      vAlongW.textContent = `${Math.round(+alongW.value*100)}%`;
+      vPtsW.textContent = `${ptsW.value}`;
+      vSmoothW.textContent = `${(+smoothW.value).toFixed(2)}`;
+      vAmpB.textContent = `${Math.round(+ampB.value*100)}%`;
+      vPtsB.textContent = `${ptsB.value}`;
+      vSmoothB.textContent = `${(+smoothB.value).toFixed(2)}`;
+    }
+
+    // ---------- rotation (drawing stage) ----------
+    let rotationAngle = 0;
+    function applyWorldRotation(){
+      world.setAttribute(
+        'transform',
+        `translate(${CENTER.x} ${CENTER.y}) rotate(${rotationAngle}) translate(${-CENTER.x} ${-CENTER.y})`
+      );
+    }
+    function clampInt(v, lo, hi){
+      v = Math.round(Number(v) || 0);
+      return Math.max(lo, Math.min(hi, v));
+    }
+    function setRotation(deg){
+      rotationAngle = clampInt(deg, -180, 180);
+      rotRange.value = rotationAngle;
+      rotNumber.value = rotationAngle;
+      applyWorldRotation();
+      if (!finished) pushHistoryDraw();
+    }
+
+    // ---------- drawing state ----------
+    let solidLeftD = "";
+    let candWaistD = "";
+    let waistSeed = 0;
+    let waistRandData = [];
+    let hasWaistCandidate = false;
+    let waistCloneOn = false;
+
+    let baseLeftD = "";
+    let baseSeed = 0;
+    let baseRandData = [];
+    let baseHas = false;
+
+    function computeWaistRightCloneD(){
+      if (!waistCloneOn || !solidLeftD) return "";
+      return rotatePath(solidLeftD, P_apex, -deg2rad(apexDeg));
+    }
+    function computeBaseRightCloneD(){
+      if (!baseHas || !baseLeftD) return "";
+      return rotatePath(baseLeftD, P_mid, Math.PI);
+    }
+
+    function updateVisibility(){
+      leftSideDashEl.style.display = solidLeftD ? "none" : "";
+      rightSideDashEl.style.display = (waistCloneOn && solidLeftD) ? "none" : "";
+      baseDashEl.style.display = baseHas ? "none" : "";
+      rotateWaistBtn.disabled = !solidLeftD;
+    }
+
+    function drawAll(){
+      if (solidLeftD){
+        solidLeftEl.style.display = "";
+        solidLeftEl.setAttribute("d", solidLeftD);
+      } else {
+        solidLeftEl.style.display = "none";
+        solidLeftEl.setAttribute("d", "");
+      }
+
+      const wr = computeWaistRightCloneD();
+      if (wr){
+        solidRightCloneEl.style.display = "";
+        solidRightCloneEl.setAttribute("d", wr);
+      } else {
+        solidRightCloneEl.style.display = "none";
+        solidRightCloneEl.setAttribute("d", "");
+      }
+
+      if (hasWaistCandidate && candWaistD){
+        candWaistEl.style.display = "";
+        candWaistEl.setAttribute("d", candWaistD);
+        adoptWaistBtn.disabled = false;
+        discardWaistBtn.disabled = false;
+      } else {
+        candWaistEl.style.display = "none";
+        candWaistEl.setAttribute("d", "");
+        adoptWaistBtn.disabled = true;
+        discardWaistBtn.disabled = true;
+      }
+
+      if (baseHas && baseLeftD){
+        baseLeftSolidEl.style.display = "";
+        baseLeftSolidEl.setAttribute("d", baseLeftD);
+        baseRightCloneEl.style.display = "";
+        baseRightCloneEl.setAttribute("d", computeBaseRightCloneD());
+      } else {
+        baseLeftSolidEl.style.display = "none";
+        baseLeftSolidEl.setAttribute("d", "");
+        baseRightCloneEl.style.display = "none";
+        baseRightCloneEl.setAttribute("d", "");
+      }
+
+      updateVisibility();
+      applyWorldRotation();
+    }
+
+    function hideWaistCandidate(){
+      hasWaistCandidate = false;
+      candWaistD = "";
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+    function remakeWaistCandidateFromSliders(){
+      if (!hasWaistCandidate) return;
+      const s = waistSettings();
+      if (waistRandData.length !== s.points){
+        const rnd = mulberry32(waistSeed);
+        waistRandData = Array.from({length:s.points}, () => ({ rn: rnd()*2-1, rt: rnd()*2-1 }));
+      }
+      candWaistD = buildCurveWithAlong(P_apex, P_left, s, waistRandData);
+      drawAll();
+    }
+    function genWaistCandidate(){
+      const s = waistSettings();
+      waistSeed = (Date.now() ^ (Math.random()*1e9)) >>> 0;
+      const rnd = mulberry32(waistSeed);
+      waistRandData = Array.from({length:s.points}, () => ({ rn: rnd()*2-1, rt: rnd()*2-1 }));
+      hasWaistCandidate = true;
+      candWaistD = buildCurveWithAlong(P_apex, P_left, s, waistRandData);
+
+      if (!solidLeftD) solidLeftD = candWaistD;
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+    function adoptWaistCandidate(){
+      if (!hasWaistCandidate) return;
+      solidLeftD = candWaistD;
+      hasWaistCandidate = false;
+      candWaistD = "";
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+    function rotateWaistToOtherSide(){
+      if (!solidLeftD) return;
+      waistCloneOn = true;
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+
+    function genBaseCurve(){
+      const s = baseSettings();
+      baseSeed = (Date.now() ^ (Math.random()*1e9)) >>> 0;
+      const rnd = mulberry32(baseSeed);
+      baseRandData = Array.from({length:s.points}, () => ({ rn: rnd()*2-1 }));
+      baseHas = true;
+      baseLeftD = buildCurveNoAlong(P_left, P_mid, s, baseRandData);
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+    function remakeBaseFromSliders(){
+      if (!baseHas || !baseLeftD) return;
+      const s = baseSettings();
+      if (baseRandData.length !== s.points){
+        const rnd = mulberry32(baseSeed);
+        baseRandData = Array.from({length:s.points}, () => ({ rn: rnd()*2-1 }));
+      }
+      baseLeftD = buildCurveNoAlong(P_left, P_mid, s, baseRandData);
+      drawAll();
+    }
+
+    // ---------- framework switching ----------
+    function switchFrameKeepAll(newDeg){
+      const old = { P_apex: {...P_apex}, P_left: {...P_left}, P_mid: {...P_mid} };
+
+      apexDeg = newDeg;
+      computeTriangle(apexDeg);
+      setFrame();
+
+      rotationAngle = 0;
+      rotRange.value = 0;
+      rotNumber.value = 0;
+
+      if (solidLeftD){
+        solidLeftD = transformPathBySegment(solidLeftD, old.P_apex, old.P_left, P_apex, P_left);
+      }
+      if (hasWaistCandidate && candWaistD){
+        candWaistD = transformPathBySegment(candWaistD, old.P_apex, old.P_left, P_apex, P_left);
+      }
+      if (baseHas && baseLeftD){
+        baseLeftD = transformPathBySegment(baseLeftD, old.P_left, old.P_mid, P_left, P_mid);
+      }
+
+      drawAll();
+      if (!finished) pushHistoryDraw();
+    }
+
+    // ---------- undo/redo ----------
+    let finished = false;
+
+    let histDraw = [];
+    let histDrawIdx = -1;
+
+    function snapshotDraw(){
+      return {
+        mode:"draw",
+        apexDeg, rotationAngle,
+        solidLeftD, candWaistD, hasWaistCandidate, waistSeed, waistRandData,
+        waistCloneOn,
+        baseLeftD, baseHas, baseSeed, baseRandData
+      };
+    }
+    function restoreDraw(s){
+      apexDeg = s.apexDeg;
+      computeTriangle(apexDeg);
+      setFrame();
+
+      rotationAngle = s.rotationAngle ?? 0;
+      rotRange.value = rotationAngle;
+      rotNumber.value = rotationAngle;
+
+      solidLeftD = s.solidLeftD || "";
+      candWaistD = s.candWaistD || "";
+      hasWaistCandidate = !!s.hasWaistCandidate;
+      waistSeed = s.waistSeed || 0;
+      waistRandData = Array.isArray(s.waistRandData) ? s.waistRandData : [];
+      waistCloneOn = !!s.waistCloneOn;
+
+      baseLeftD = s.baseLeftD || "";
+      baseHas = !!s.baseHas;
+      baseSeed = s.baseSeed || 0;
+      baseRandData = Array.isArray(s.baseRandData) ? s.baseRandData : [];
+
+      frameBtns.forEach(b => b.classList.toggle('selected', Number(b.dataset.deg) === apexDeg));
+      drawAll();
+    }
+    function pushHistoryDraw(){
+      if (finished) return;
+      const snap = snapshotDraw();
+      if (histDrawIdx >= 0){
+        const prev = histDraw[histDrawIdx];
+        if (JSON.stringify(prev) === JSON.stringify(snap)) return;
+      }
+      histDraw = histDraw.slice(0, histDrawIdx + 1);
+      histDraw.push(snap);
+      histDrawIdx = histDraw.length - 1;
+      syncUndoRedoButtons();
+    }
+
+    let histFin = [];
+    let histFinIdx = -1;
+
+    function snapshotFin(){
+      return {
+        mode:"fin",
+        apexDeg,
+        instances: instances.map(it => ({x:it.x, y:it.y, rot:it.rot})),
+        selectedRotDeg
+      };
+    }
+    function restoreFin(s){
+      apexDeg = s.apexDeg;
+      allowedRotations = buildAllowedRotations(apexDeg);
+      selectedRotDeg = (s.selectedRotDeg ?? allowedRotations[0] ?? 0);
+      renderRotChoices();
+
+      instances = (s.instances || []).map(it => ({x:+it.x||0, y:+it.y||0, rot:+it.rot||0}));
+      renderInstances();
+    }
+    function pushHistoryFin(){
+      if (!finished) return;
+      const snap = snapshotFin();
+      if (histFinIdx >= 0){
+        const prev = histFin[histFinIdx];
+        if (JSON.stringify(prev) === JSON.stringify(snap)) return;
+      }
+      histFin = histFin.slice(0, histFinIdx + 1);
+      histFin.push(snap);
+      histFinIdx = histFin.length - 1;
+      syncUndoRedoButtons();
+    }
+
+    function syncUndoRedoButtons(){
+      if (!finished){
+        undoBtn.disabled = histDrawIdx <= 0;
+        redoBtn.disabled = histDrawIdx >= histDraw.length - 1;
+      } else {
+        undoBtn.disabled = histFinIdx <= 0;
+        redoBtn.disabled = histFinIdx >= histFin.length - 1;
+      }
+    }
+
+    function undo(){
+      if (!finished){
+        if (histDrawIdx <= 0) return;
+        histDrawIdx--;
+        restoreDraw(histDraw[histDrawIdx]);
+        syncUndoRedoButtons();
+      } else {
+        if (histFinIdx <= 0) return;
+        histFinIdx--;
+        restoreFin(histFin[histFinIdx]);
+        syncUndoRedoButtons();
+      }
+    }
+    function redo(){
+      if (!finished){
+        if (histDrawIdx >= histDraw.length - 1) return;
+        histDrawIdx++;
+        restoreDraw(histDraw[histDrawIdx]);
+        syncUndoRedoButtons();
+      } else {
+        if (histFinIdx >= histFin.length - 1) return;
+        histFinIdx++;
+        restoreFin(histFin[histFinIdx]);
+        syncUndoRedoButtons();
+      }
+    }
+
+    // ---------- finish mode: instances / dragging / cloning ----------
+    let protoNode = null;
+    let instances = []; // {x,y,rot}
+
+    let allowedRotations = [];
+    let selectedRotDeg = 0; // 默认第一个
+
+    function buildAllowedRotations(deg){
+      if (deg === 60) return [60,120,180,240,300];
+      if (deg === 90) return [90,180,270];
+      if (deg === 120) return [120,240];
+      return [180];
+    }
+
+    function renderRotChoices(){
+      rotChoices.innerHTML = "";
+      // 若没选过，确保默认第一个
+      if (!allowedRotations.length) return;
+      if (!allowedRotations.includes(selectedRotDeg)) selectedRotDeg = allowedRotations[0];
+
+      allowedRotations.forEach(d => {
+        const b = document.createElement('button');
+        b.className = 'miniBtn' + (d === selectedRotDeg ? ' selected' : '');
+        b.textContent = `${d}°`;
+        b.addEventListener('click', () => {
+          selectedRotDeg = d;
+          renderRotChoices();
+          pushHistoryFin();
+        });
+        rotChoices.appendChild(b);
+      });
+    }
+
+    function applyInstanceTransform(g, inst){
+      const s = 1/3;
+      const px = CENTER.x, py = CENTER.y;
+      g.setAttribute(
+        'transform',
+        `translate(${inst.x} ${inst.y}) ` +
+        `translate(${px} ${py}) rotate(${inst.rot}) scale(${s}) translate(${-px} ${-py})`
+      );
+    }
+
+    function makeInstanceGroup(idx, inst){
+      const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+      g.setAttribute('class','instance');
+      g.dataset.idx = String(idx);
+      g.style.cursor = 'grab';
+
+      // 关键：用一个“透明底板”让“内部空白处”也能命中拖动
+      const hit = document.createElementNS("http://www.w3.org/2000/svg","rect");
+      hit.setAttribute('x', 0);
+      hit.setAttribute('y', 0);
+      hit.setAttribute('width', SVG_W);
+      hit.setAttribute('height', SVG_H);
+      hit.setAttribute('fill', 'transparent');
+      hit.style.pointerEvents = 'all';
+      g.appendChild(hit);
+
+      const node = protoNode.cloneNode(true);
+      node.querySelectorAll('*').forEach(el => {
+        el.style.pointerEvents = 'none'; // 避免子元素抢事件
+      });
+      g.appendChild(node);
+
+      g.style.pointerEvents = 'all';
+      applyInstanceTransform(g, inst);
+      return g;
+    }
+
+    function renderInstances(){
+      finishedLayer.innerHTML = "";
+      instances.forEach((inst, i) => {
+        finishedLayer.appendChild(makeInstanceGroup(i, inst));
+      });
+    }
+
+    function makeProtoFromCurrentWorld(){
+      const clone = world.cloneNode(true);
+      clone.removeAttribute('id');
+
+      clone.querySelectorAll('line, path, circle').forEach(el => {
+        if (el.tagName === 'circle'){
+          el.setAttribute('fill', '#000');
+          el.setAttribute('stroke', '#000');
+        } else {
+          el.setAttribute('fill', 'none');
+          el.setAttribute('stroke', '#000');
+        }
+        el.removeAttribute('opacity');
+        el.removeAttribute('stroke-dasharray');
+        // 保持线条可见
+        if (el.hasAttribute('stroke-width')){
+          const w = Number(el.getAttribute('stroke-width')) || 6;
+          el.setAttribute('stroke-width', String(Math.max(w, 8)));
+        }
+      });
+
+      // 成品不继承“作图区整体旋转”：把 transform 去掉
+      clone.removeAttribute('transform');
+
+      return clone;
+    }
+
+    function finishDrawing(){
+      if (finished) return;
+      finished = true;
+
+      // UI切换：结束作画按钮消失
+      finishBtn.classList.add('hidden');
+
+      panelDraw.classList.add('hidden');
+      panelFinish.classList.remove('hidden');
+      rotCtl.classList.add('hidden');
+
+      drawLayer.classList.add('hidden');
+      finishedLayer.classList.remove('hidden');
+
+      protoNode = makeProtoFromCurrentWorld();
+
+      allowedRotations = buildAllowedRotations(apexDeg);
+      selectedRotDeg = allowedRotations[0] ?? 0;
+      renderRotChoices();
+
+      instances = [{x:0, y:0, rot:0}];
+      renderInstances();
+
+      histFin = [];
+      histFinIdx = -1;
+      pushHistoryFin();
+      syncUndoRedoButtons();
+    }
+
+    function addClone(rotDeg=0){
+      const n = instances.length;
+      const offset = 60 + n*12;
+      instances.push({x: offset, y: offset, rot: rotDeg});
+      renderInstances();
+      pushHistoryFin();
+    }
+
+    // dragging instances (hit rect captures everywhere inside each instance)
+    let drag = null; // {idx, startX,startY, baseX,baseY, pointerId}
+
+    function svgPointFromEvent(e){
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX; pt.y = e.clientY;
+      const m = svg.getScreenCTM();
+      if (!m) return {x:0,y:0};
+      const inv = m.inverse();
+      const p = pt.matrixTransform(inv);
+      return {x:p.x, y:p.y};
+    }
+
+    function findInstanceGroup(target){
+      let el = target;
+      while (el && el !== svg){
+        if (el.classList && el.classList.contains('instance')) return el;
+        el = el.parentNode;
+      }
+      return null;
+    }
+
+    svg.addEventListener('pointerdown', (e) => {
+      if (!finished) return;
+      const g = findInstanceGroup(e.target);
+      if (!g) return;
+
+      const idx = Number(g.dataset.idx);
+      if (!Number.isFinite(idx)) return;
+
+      const p = svgPointFromEvent(e);
+      drag = { idx, startX: p.x, startY: p.y, baseX: instances[idx].x, baseY: instances[idx].y, pointerId: e.pointerId };
+      g.style.cursor = 'grabbing';
+      try { svg.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+    }, {passive:false});
+
+    svg.addEventListener('pointermove', (e) => {
+      if (!finished || !drag || e.pointerId !== drag.pointerId) return;
+      const p = svgPointFromEvent(e);
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      const inst = instances[drag.idx];
+      inst.x = drag.baseX + dx;
+      inst.y = drag.baseY + dy;
+
+      const g = finishedLayer.querySelector(`g.instance[data-idx="${drag.idx}"]`);
+      if (g) applyInstanceTransform(g, inst);
+      e.preventDefault();
+    }, {passive:false});
+
+    function endDrag(){
+      if (!drag) return;
+      const g = finishedLayer.querySelector(`g.instance[data-idx="${drag.idx}"]`);
+      if (g) g.style.cursor = 'grab';
+      drag = null;
+      pushHistoryFin();
+    }
+
+    svg.addEventListener('pointerup', (e) => {
+      if (!finished || !drag || e.pointerId !== drag.pointerId) return;
+      endDrag();
+      e.preventDefault();
+    }, {passive:false});
+    svg.addEventListener('pointercancel', () => endDrag());
+
+    // ---------- wire events ----------
+    frameBtns.forEach(b => b.addEventListener('click', () => {
+      if (finished) return;
+      const deg = Number(b.dataset.deg);
+      frameBtns.forEach(x => x.classList.toggle('selected', x === b));
+      switchFrameKeepAll(deg);
+    }));
+
+    genWaistBtn.addEventListener('click', genWaistCandidate);
+    adoptWaistBtn.addEventListener('click', adoptWaistCandidate);
+    discardWaistBtn.addEventListener('click', hideWaistCandidate);
+    rotateWaistBtn.addEventListener('click', rotateWaistToOtherSide);
+
+    genBaseBtn.addEventListener('click', genBaseCurve);
+
+    [ampW, alongW, ptsW, smoothW].forEach(el => el.addEventListener('input', () => {
+      refreshLabels();
+      remakeWaistCandidateFromSliders();
+    }));
+    [ampB, ptsB, smoothB].forEach(el => el.addEventListener('input', () => {
+      refreshLabels();
+      remakeBaseFromSliders();
+      if (!finished) pushHistoryDraw();
+    }));
+
+    rotRange.addEventListener('input', () => setRotation(rotRange.value));
+    rotNumber.addEventListener('input', () => setRotation(rotNumber.value));
+    rotUp.addEventListener('click', () => setRotation(rotationAngle + 1));
+    rotDown.addEventListener('click', () => setRotation(rotationAngle - 1));
+
+    undoBtn.addEventListener('click', undo);
+    redoBtn.addEventListener('click', redo);
+    finishBtn.addEventListener('click', finishDrawing);
+
+    cloneBtn.addEventListener('click', () => addClone(0));
+    rotCloneBtn.addEventListener('click', () => addClone(selectedRotDeg));
+
+    // ---------- init ----------
+    function init(){
+      refreshLabels();
+      computeTriangle(apexDeg);
+      setFrame();
+      rotationAngle = 0;
+      rotRange.value = 0;
+      rotNumber.value = 0;
+      drawAll();
+
+      histDraw = [];
+      histDrawIdx = -1;
+      pushHistoryDraw();
+      syncUndoRedoButtons();
+    }
+    init();
+  </script>
+</body>
+</html>

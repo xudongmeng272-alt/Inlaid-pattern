@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>曲线框架｜旋转正确拖动 + 作画 + 终稿克隆</title>
+<style>
+  :root{
+    --bg:#f7f7f7; --panel:#fff; --ink:#111; --muted:#666;
+    --primary:#1f6feb; --danger:#ff4d4f; --border:#e6e6e6; --border2:#d9d9d9;
+    --mainStrokeW:4; /*  统一线条粗细 */
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap{ max-width:1400px; margin:16px auto; padding:0 14px 18px; }
+  .panel{ background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px; box-shadow:0 1px 0 rgba(0,0,0,.02); }
+  .bar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+  .pill{ display:flex; align-items:center; gap:10px; border:1px solid var(--border); border-radius:12px; padding:8px 10px; background:#fff; flex-wrap:wrap; }
+  .label{ font-size:13px; color:var(--muted); }
+  .val{ font-variant-numeric: tabular-nums; font-size:13px; color:var(--muted); min-width:52px; text-align:right; }
+  input[type="range"]{ width:200px; }
+  input[type="number"]{
+    width:92px; height:34px; border:1px solid var(--border2); border-radius:10px;
+    padding:0 10px; font-size:14px; background:#fff; color:#111;
+  }
+
+  .top-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .side{ border:1px solid var(--border); border-radius:12px; padding:10px; background:#fff; }
+  .side h3{ margin:0 0 10px; font-size:14px; color:#111; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+
+  .ops{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  button{
+    appearance:none; border:1px solid var(--border2); background:#fff; color:#111;
+    border-radius:10px; padding:9px 12px; font-size:14px; cursor:pointer; user-select:none;
+  }
+  button.primary{ border-color:#1f6feb33; background:var(--primary); color:#fff; }
+  button.danger{ border-color:#ff4d4f33; background:var(--danger); color:#fff; }
+  button:disabled{
+    opacity:.35; cursor:not-allowed;
+    background:#f3f3f3; color:#777; border-color:#e2e2e2;
+  }
+
+  .seg{ display:flex; border:1px solid var(--border2); border-radius:10px; overflow:hidden; width:max-content; }
+  .seg button{ border:0; border-right:1px solid var(--border2); border-radius:0; padding:9px 12px; font-size:13px; }
+  .seg button:last-child{ border-right:0; }
+  .seg button.active{ background:#111; color:#fff; }
+
+  .sliders{ display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; margin-top:10px; }
+  .field{ display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }
+  .field input[type="range"]{ width:100%; }
+  .field .val2{ min-width:52px; text-align:right; font-variant-numeric: tabular-nums; }
+
+  .stage{ margin-top:12px; width:100%; background:#fff; border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  svg{ width:100%; height:auto; display:block; touch-action:none; }
+
+  /* ✅ 主线/克隆线统一粗细 */
+  .h.main path.mainStroke, .h.clone path.mainStroke{ fill:none; stroke:#111; stroke-width:var(--mainStrokeW); stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+  .v.main path.mainStroke, .v.clone path.mainStroke{ fill:none; stroke:#1f6feb; stroke-width:var(--mainStrokeW); stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+
+  /* ✅ 候选也统一粗细（只是虚线显示区别） */
+  .h.candidate path.mainStroke{ fill:none; stroke:#777; stroke-width:var(--mainStrokeW); stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:10 10; pointer-events:none; }
+  .v.candidate path.mainStroke{ fill:none; stroke:#1f6feb; stroke-width:var(--mainStrokeW); stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:10 10; opacity:.75; pointer-events:none; }
+  .clone path{ opacity:.92; }
+
+  /* ✅ 触控更好拖：加大命中范围 */
+  .hitStroke{
+    fill:none;
+    stroke:rgba(0,0,0,0);
+    stroke-width:42;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+    pointer-events:stroke;
+  }
+
+  .draggable:hover{ cursor:grab; }
+  .dragging{ cursor:grabbing !important; }
+
+  .drawStroke{ fill:none; stroke-linecap:round; stroke-linejoin:round; }
+
+  .finalClone{ cursor:pointer; }
+  .finalClone:hover{ filter: drop-shadow(0 1px 1px rgba(0,0,0,.12)); }
+
+  .finalBase { cursor:grab; }
+  .finalBase.dragging { cursor:grabbing; }
+
+  body.final .top-grid{ display:none; }
+  body.final #finishBtn{ display:none; }
+  body.final #rotPill{ display:none; }
+  body:not(.final) #finalControls{ display:none; }
+
+  #finalScene[display="none"]{ pointer-events:none; }
+
+  @media (max-width: 900px){
+    .top-grid{ grid-template-columns:1fr; }
+    input[type="range"]{ width:180px; }
+  }
+</style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div class="bar">
+      <div class="pill" id="rotPill">
+        <span class="label">画面旋转</span>
+        <button id="rotLeft">⟲</button>
+        <button id="rotRight">⟳</button>
+        <span class="label">度数</span>
+        <input id="rotNum" type="number" min="-180" max="180" step="1" value="0" />
+        <input id="rotRange" type="range" min="-180" max="180" value="0" />
+        <span id="rotVal" class="val">0°</span>
+        <button id="rotReset" class="danger">归零</button>
+      </div>
+
+      <div class="pill" id="drawPill">
+        <button id="undoBtn">撤销</button>
+        <button id="redoBtn">恢复</button>
+        <button id="finishBtn" class="primary">结束作画</button>
+
+        <div class="pill" id="finalControls" style="border:0; padding:0; gap:8px; background:transparent;">
+          <button id="cloneBtn" class="primary">克隆</button>
+          <button id="lrCloneBtn" class="primary">左右翻转克隆</button>
+          <button id="udCloneBtn" class="primary">上下翻转克隆</button>
+          <button id="xyCloneBtn" class="primary">四方克隆</button>
+          <span class="label">转动度数</span>
+          <input id="cloneRotNum" type="number" min="-180" max="180" step="1" value="0" />
+          <input id="cloneRot" type="range" min="-180" max="180" value="0" />
+          <span id="cloneRotVal" class="val">0°</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="top-grid" id="editGrid">
+      <div class="side">
+        <h3><span>水平</span></h3>
+
+        <div class="ops">
+          <button id="hGen" class="primary">生成候选</button>
+          <button id="hAccept" disabled>采用</button>
+          <button id="hDiscard" disabled>丢弃</button>
+          <button id="hReset" class="danger">重置</button>
+        </div>
+
+        <div class="ops">
+          <div class="seg" aria-label="水平克隆">
+            <button id="hModeNone" class="active">无克隆</button>
+            <button id="hModeClone">平移克隆</button>
+            <button id="hModeMirror">翻转克隆</button>
+          </div>
+        </div>
+
+        <div class="sliders">
+          <!-- ✅ 水平长度范围：140～380，初始220 -->
+          <div class="field"><span>长度</span><input id="hSpan" type="range" min="140" max="380" value="220"><span id="hSpanVal" class="val2">220</span></div>
+          <div class="field"><span>起伏</span><input id="hAmp" type="range" min="10" max="240" value="120"><span id="hAmpVal" class="val2">120</span></div>
+
+          <div class="field"><span>控制点</span><input id="hPts" type="range" min="5" max="17" value="9"><span id="hPtsVal" class="val2">9</span></div>
+          <div></div>
+        </div>
+
+        <div style="margin-top:12px; border-top:1px dashed #e9e9e9; padding-top:10px;">
+          <h3 style="margin:0 0 8px; font-size:14px;">
+            <span>作画</span>
+          </h3>
+          <div class="ops">
+            <div class="seg" aria-label="作画工具">
+              <button id="drawToolPen">画笔</button>
+              <button id="drawToolEraser">橡皮</button>
+              <button id="drawToolOff" class="active">关闭</button>
+            </div>
+            <span class="label">颜色</span>
+            <input id="drawColor" type="color" value="#111111" style="width:44px; height:34px; padding:0; border:1px solid var(--border2); border-radius:10px; background:#fff;">
+          </div>
+          <div class="sliders">
+            <div class="field"><span>笔粗</span><input id="penSize" type="range" min="1" max="18" value="5"><span id="penSizeVal" class="val2">5</span></div>
+            <div class="field"><span>橡皮</span><input id="eraseSize" type="range" min="8" max="70" value="26"><span id="eraseSizeVal" class="val2">26</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="side">
+        <h3><span>竖直</span></h3>
+
+        <div class="ops">
+          <button id="vGen" class="primary">生成候选</button>
+          <button id="vAccept" disabled>采用</button>
+          <button id="vDiscard" disabled>丢弃</button>
+          <button id="vReset" class="danger">重置</button>
+        </div>
+
+        <div class="ops">
+          <div class="seg" aria-label="竖直克隆">
+            <button id="vModeNone" class="active">无克隆</button>
+            <button id="vModeClone">平移克隆</button>
+            <button id="vModeMirror">翻转克隆</button>
+          </div>
+        </div>
+
+        <div class="sliders">
+          <!-- ✅ 竖直长度范围：140～380，初始220 -->
+          <div class="field"><span>长度</span><input id="vLen" type="range" min="140" max="380" value="220"><span id="vLenVal" class="val2">220</span></div>
+          <div class="field"><span>倾斜</span><input id="vTilt" type="range" min="-55" max="55" value="16"><span id="vTiltVal" class="val2">16°</span></div>
+
+          <div class="field"><span>起伏</span><input id="vAmp" type="range" min="0" max="220" value="95"><span id="vAmpVal" class="val2">95</span></div>
+          <div class="field"><span>控制点</span><input id="vPts" type="range" min="5" max="19" value="11"><span id="vPtsVal" class="val2">11</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <svg id="svg" viewBox="0 0 1100 560">
+      <rect x="0" y="0" width="1100" height="560" fill="#fff"></rect>
+
+      <g id="editWrap">
+        <g id="world">
+          <g id="hCandidateGroup" class="h candidate" visibility="hidden">
+            <path id="hCandidateHit" class="hitStroke"></path>
+            <path id="hCandidatePath" class="mainStroke"></path>
+          </g>
+
+          <g id="hMainGroup" class="h main draggable">
+            <path id="hMainHit" class="hitStroke"></path>
+            <path id="hMainPath" class="mainStroke"></path>
+          </g>
+
+          <g id="hCloneOuter" class="h clone draggable" visibility="hidden">
+            <g id="hCloneInner">
+              <path id="hCloneHit" class="hitStroke"></path>
+              <path id="hClonePath" class="mainStroke"></path>
+            </g>
+          </g>
+
+          <g id="vCandidateGroup" class="v candidate" visibility="hidden">
+            <path id="vCandidateHit" class="hitStroke"></path>
+            <path id="vCandidatePath" class="mainStroke"></path>
+          </g>
+
+          <g id="vMainGroup" class="v main draggable">
+            <path id="vMainHit" class="hitStroke"></path>
+            <path id="vMainPath" class="mainStroke"></path>
+          </g>
+
+          <g id="vCloneOuter" class="v clone draggable" visibility="hidden">
+            <g id="vCloneInner">
+              <path id="vCloneHit" class="hitStroke"></path>
+              <path id="vClonePath" class="mainStroke"></path>
+            </g>
+          </g>
+
+          <g id="drawLayer"></g>
+        </g>
+      </g>
+
+      <g id="finalScene" visibility="hidden" display="none">
+        <g id="baseOuter" class="finalBase">
+          <g id="baseInner"></g>
+        </g>
+        <g id="clonesLayer"></g>
+      </g>
+    </svg>
+  </div>
+</div>
+
+<script>
+(() => {
+  const W=1100, H=560;
+  const DEFAULT_CLONE_DX=10, DEFAULT_CLONE_DY=-10;
+  const M=60;
+  const SVG_NS="http://www.w3.org/2000/svg";
+
+  // 隐藏掉的大弯/回绕：固定为适中强度
+  const H_BIG=50, H_LOOP=26;
+  const V_BIG=42, V_LOOP=22;
+
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp=(a,b,t)=>a+(b-a)*t;
+  const rand=(a,b)=>a+(b-a)*Math.random();
+  const randsign=()=>Math.random()<0.5?-1:1;
+
+  const svg=document.getElementById('svg');
+  const world=document.getElementById('world');
+
+  const rotRange=document.getElementById('rotRange');
+  const rotNum=document.getElementById('rotNum');
+  const rotVal=document.getElementById('rotVal');
+  const rotLeft=document.getElementById('rotLeft');
+  const rotRight=document.getElementById('rotRight');
+  const rotReset=document.getElementById('rotReset');
+
+  const undoBtn=document.getElementById('undoBtn');
+  const redoBtn=document.getElementById('redoBtn');
+  const finishBtn=document.getElementById('finishBtn');
+
+  const finalScene=document.getElementById('finalScene');
+  const editWrap=document.getElementById('editWrap');
+  const drawLayer=document.getElementById('drawLayer');
+
+  const baseOuter=document.getElementById('baseOuter');
+  const baseInner=document.getElementById('baseInner');
+  const clonesLayer=document.getElementById('clonesLayer');
+
+  const cloneBtn=document.getElementById('cloneBtn');
+  const lrCloneBtn=document.getElementById('lrCloneBtn');
+  const udCloneBtn=document.getElementById('udCloneBtn');
+  const xyCloneBtn=document.getElementById('xyCloneBtn');
+
+  const cloneRot=document.getElementById('cloneRot');
+  const cloneRotNum=document.getElementById('cloneRotNum');
+  const cloneRotVal=document.getElementById('cloneRotVal');
+
+  let appMode='edit';
+  let finalLocked=false; // ✅ 结束作画后不允许撤销回编辑
+
+  function screenToLocalOnElement(clientX, clientY, el){
+    const pt = svg.createSVGPoint();
+    pt.x = clientX; pt.y = clientY;
+    const ctm = el.getScreenCTM();
+    if(!ctm) return {x:0,y:0};
+    const sp = pt.matrixTransform(ctm.inverse());
+    return {x: sp.x, y: sp.y};
+  }
+
+  // ===== 画面旋转 =====
+  let rotDeg=0;
+  function applyRotationVisual(){
+    world.setAttribute('transform', `rotate(${rotDeg.toFixed(2)} ${W/2} ${H/2})`);
+    const r = Math.round(rotDeg);
+    rotVal.textContent = `${r}°`;
+    rotRange.value = String(r);
+    rotNum.value = String(r);
+  }
+  function setRotDeg(v){
+    rotDeg = clamp(v, -180, 180);
+    applyRotationVisual();
+  }
+  rotRange.addEventListener('input', ()=>{ if(appMode!=='edit') return; setRotDeg(parseFloat(rotRange.value)||0); });
+  rotRange.addEventListener('change', ()=>{ if(appMode!=='edit') return; pushHistory(); });
+  rotNum.addEventListener('input', ()=>{ if(appMode!=='edit') return; setRotDeg(parseFloat(rotNum.value)||0); });
+  rotNum.addEventListener('change', ()=>{ if(appMode!=='edit') return; pushHistory(); });
+  rotLeft.addEventListener('click', ()=>{ if(appMode!=='edit') return; setRotDeg(rotDeg-15); pushHistory(); });
+  rotRight.addEventListener('click', ()=>{ if(appMode!=='edit') return; setRotDeg(rotDeg+15); pushHistory(); });
+  rotReset.addEventListener('click', ()=>{ if(appMode!=='edit') return; setRotDeg(0); pushHistory(); });
+  applyRotationVisual();
+
+  // ===== 曲线生成 =====
+  function smoothRandomOffsets(n, smoothness01){
+    let arr = Array.from({length:n}, () => (Math.random()*2-1));
+    const passes = Math.round(lerp(2, 11, smoothness01));
+    for(let p=0;p<passes;p++){
+      const next = arr.slice();
+      for(let i=0;i<n;i++){
+        const a = arr[i-1] ?? arr[i];
+        const b = arr[i];
+        const c = arr[i+1] ?? arr[i];
+        next[i] = (a + 2*b + c)/4;
+      }
+      arr = next;
+    }
+    return arr;
+  }
+  function gauss(t, mu, sigma){
+    const z=(t-mu)/sigma;
+    return Math.exp(-0.5*z*z);
+  }
+  function catmullRomPoint(p0,p1,p2,p3,u){
+    const u2=u*u, u3=u2*u;
+    const x = 0.5*(2*p1.x + (-p0.x+p2.x)*u + (2*p0.x-5*p1.x+4*p2.x-p3.x)*u2 + (-p0.x+3*p1.x-3*p2.x+p3.x)*u3);
+    const y = 0.5*(2*p1.y + (-p0.y+p2.y)*u + (2*p0.y-5*p1.y+4*p2.y-p3.y)*u2 + (-p0.y+3*p1.y-3*p2.y+p3.y)*u3);
+    return {x,y};
+  }
+  function sampleCatmullRom(points, perSeg=24){
+    const pts=points;
+    if(pts.length<2) return pts.slice();
+    const out=[];
+    for(let i=0;i<pts.length-1;i++){
+      const p0=pts[i-1] ?? pts[i];
+      const p1=pts[i];
+      const p2=pts[i+1];
+      const p3=pts[i+2] ?? p2;
+      for(let k=0;k<perSeg;k++){
+        out.push(catmullRomPoint(p0,p1,p2,p3,k/perSeg));
+      }
+    }
+    out.push(pts[pts.length-1]);
+    return out;
+  }
+  function polyToPath(points){
+    if(!points.length) return "M 0 0";
+    let d=`M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+    for(let i=1;i<points.length;i++){
+      d += ` L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)}`;
+    }
+    return d;
+  }
+  function curveSelfIntersects(ctrlPts){
+    const s=sampleCatmullRom(ctrlPts, 18);
+    const n=s.length;
+    const orient=(a,b,c)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+    const onSegment=(a,b,p)=>Math.min(a.x,b.x)-1e-9<=p.x&&p.x<=Math.max(a.x,b.x)+1e-9&&Math.min(a.y,b.y)-1e-9<=p.y&&p.y<=Math.max(a.y,b.y)+1e-9;
+    const segInt=(a,b,c,d)=>{
+      const o1=orient(a,b,c), o2=orient(a,b,d), o3=orient(c,d,a), o4=orient(c,d,b);
+      if((o1>0&&o2<0||o1<0&&o2>0)&&(o3>0&&o4<0||o3<0&&o4>0)) return true;
+      if(Math.abs(o1)<1e-9 && onSegment(a,b,c)) return true;
+      if(Math.abs(o2)<1e-9 && onSegment(a,b,d)) return true;
+      if(Math.abs(o3)<1e-9 && onSegment(c,d,a)) return true;
+      if(Math.abs(o4)<1e-9 && onSegment(c,d,b)) return true;
+      return false;
+    };
+    for(let i=0;i<n-1;i++){
+      const a=s[i], b=s[i+1];
+      for(let j=i+2;j<n-1;j++){
+        if(segInt(a,b,s[j],s[j+1])) return true;
+      }
+    }
+    return false;
+  }
+  function translateCtrl(ctrl, dx, dy){
+    for(const p of ctrl){ p.x += dx; p.y += dy; }
+  }
+  function bboxOfSamples(samples){
+    let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    for(const p of samples){
+      if(p.x<minX) minX=p.x;
+      if(p.y<minY) minY=p.y;
+      if(p.x>maxX) maxX=p.x;
+      if(p.y>maxY) maxY=p.y;
+    }
+    if(!isFinite(minX)) return {minX:0,minY:0,maxX:0,maxY:0};
+    return {minX,minY,maxX,maxY};
+  }
+  function keepCtrlInView(ctrl, pad=44){
+    const s=sampleCatmullRom(ctrl, 18);
+    const b=bboxOfSamples(s);
+    let dx=0, dy=0;
+    if(b.minX < pad) dx += (pad - b.minX);
+    if(b.maxX > W-pad) dx -= (b.maxX - (W-pad));
+    if(b.minY < pad) dy += (pad - b.minY);
+    if(b.maxY > H-pad) dy -= (b.maxY - (H-pad));
+    if(dx||dy) translateCtrl(ctrl, dx, dy);
+    for(const p of ctrl){
+      p.x = clamp(p.x, pad, W-pad);
+      p.y = clamp(p.y, pad, H-pad);
+    }
+    return ctrl;
+  }
+  function generateSafeCtrl(makeCtrl, cfg){
+    let last=null;
+    for(let k=0;k<90;k++){
+      const dec = Math.pow(0.92, Math.floor(k/6));
+      const tryCfg = {...cfg, loop: (cfg.loop ?? 0) * dec};
+      last = makeCtrl(tryCfg);
+      if(!curveSelfIntersects(last)) return last;
+    }
+    return last;
+  }
+
+  function generateHorizontalCtrl(cfg){
+    const count=cfg.pts, amp=cfg.amp, span=cfg.span, big=cfg.big/100;
+    const loop = Math.pow((cfg.loop/100), 1.18);
+    const s01 = 0.68;
+
+    // 向上一些
+    const endY = clamp(H*rand(0.30,0.52) + randsign()*rand(0,14), M, H-M);
+
+    const x0=(W-span)/2, x1=x0+span;
+    const rnd=smoothRandomOffsets(count,s01);
+
+    const skew = rand(-0.42, 0.42);
+    const mu1 = clamp(0.5 + skew, 0.18, 0.82);
+    const sig1 = rand(0.10, 0.20);
+    const mu2 = clamp(mu1 + randsign()*rand(0.10,0.28), 0.12, 0.88);
+    const sig2 = rand(0.08, 0.18);
+
+    const ph1=Math.random()*Math.PI*2;
+    const ph2=Math.random()*Math.PI*2;
+    const ph3=Math.random()*Math.PI*2;
+
+    const xLoopScale = span * (0.08 + 0.52*loop);
+    const xCurlScale = span * (0.05 + 0.36*loop) * (0.35 + 0.65*big);
+    const pEnv = rand(0.85, 2.2);
+
+    const ctrl=[];
+    for(let i=0;i<count;i++){
+      const t=i/(count-1);
+      const baseX=lerp(x0,x1,t);
+      const win=Math.sin(Math.PI*t);
+      const env=Math.pow(win, pEnv);
+
+      const xW =
+        Math.sin(2*Math.PI*t + ph1) +
+        0.55*Math.sin(4*Math.PI*t + ph2) +
+        0.28*Math.sin(6*Math.PI*t + ph3);
+
+      const humpA = (gauss(t, mu1, sig1) - 0.55*gauss(t, mu1 + 0.10*randsign(), sig1*1.25)) * randsign();
+      const humpB = (Math.random()<0.7 ? gauss(t, mu2, sig2)*randsign() : 0);
+      const twist = Math.sin(2*Math.PI*t + ph2) * Math.sin(3*Math.PI*t + ph3);
+
+      let x = baseX
+        + xLoopScale * loop * win * xW
+        + xCurlScale * loop * env * (0.85*humpA + 0.50*humpB + 0.35*twist);
+
+      const tex = rnd[i] * rand(0.45, 0.95);
+      const multi = (Math.sin(2*Math.PI*t+ph1) + 0.7*Math.sin(3*Math.PI*t+ph2) + 0.35*Math.sin(5*Math.PI*t+ph3));
+      const yHump = (0.8*humpA + 0.5*humpB);
+
+      const yDisp =
+        amp * (0.55*tex + 0.22*(1-big)*multi + 0.70*big*yHump) * (0.55 + 0.55*env)
+        + (0.14*amp + 0.06*span*loop) * loop * win * twist;
+
+      let y = endY + yDisp;
+      const ease = Math.sin(Math.PI*t);
+      y = lerp(endY, y, 0.52 + 0.48*ease);
+
+      ctrl.push({x: clamp(x, M-10, W-(M-10)), y: clamp(y, M, H-M)});
+    }
+    ctrl[0] = {x:x0, y:endY};
+    ctrl[count-1] = {x:x1, y:endY};
+
+    keepCtrlInView(ctrl, 44);
+    return ctrl;
+  }
+
+  function generateVerticalCtrl(cfg){
+    const count=cfg.pts, amp=cfg.amp, big=cfg.big/100;
+    const loop = Math.pow((cfg.loop/100), 1.18);
+    const s01 = 0.70;
+
+    const len = clamp(cfg.len, 120, H-2*M);
+    const tiltDeg = clamp(cfg.tiltDeg, -70, 70);
+    const tiltRad = tiltDeg * Math.PI / 180;
+
+    const y0 = rand(M+20, H - M - len - 20);
+    const y1 = y0 + len;
+
+    let dx = Math.tan(tiltRad) * len;
+    dx = clamp(dx, -(W-2*M-80), (W-2*M-80));
+
+    let x0 = rand(M+40, W-M-40);
+    let x1 = x0 + dx;
+
+    if(x1 < M+30){ const shift = (M+30) - x1; x0 += shift; x1 += shift; }
+    if(x1 > W-M-30){ const shift = (W-M-30) - x1; x0 += shift; x1 += shift; }
+
+    const baseDx = (x1-x0), baseDy=(y1-y0);
+    const L = Math.hypot(baseDx, baseDy) || 1;
+    const tx = baseDx/L, ty = baseDy/L;
+    const nx = -ty, ny = tx;
+
+    const rnd=smoothRandomOffsets(count,s01);
+
+    const skew = rand(-0.42, 0.42);
+    const mu1 = clamp(0.5 + skew, 0.18, 0.82);
+    const sig1 = rand(0.10, 0.22);
+    const mu2 = clamp(mu1 + randsign()*rand(0.10,0.28), 0.12, 0.88);
+    const sig2 = rand(0.08, 0.18);
+
+    const ph1=Math.random()*Math.PI*2;
+    const ph2=Math.random()*Math.PI*2;
+    const ph3=Math.random()*Math.PI*2;
+
+    const tangLoop = (0.08 + 0.52*loop) * L;
+    const normLoop = (0.05 + 0.36*loop) * L * (0.35 + 0.65*big);
+    const pEnv = rand(0.85, 2.2);
+
+    const ctrl=[];
+    for(let i=0;i<count;i++){
+      const t=i/(count-1);
+      const bx = x0 + t*baseDx;
+      const by = y0 + t*baseDy;
+
+      const win=Math.sin(Math.PI*t);
+      const env=Math.pow(win, pEnv);
+
+      const w =
+        Math.sin(2*Math.PI*t + ph1) +
+        0.55*Math.sin(4*Math.PI*t + ph2) +
+        0.28*Math.sin(6*Math.PI*t + ph3);
+
+      const humpA = (gauss(t, mu1, sig1) - 0.55*gauss(t, mu1 + 0.10*randsign(), sig1*1.25)) * randsign();
+      const humpB = (Math.random()<0.7 ? gauss(t, mu2, sig2)*randsign() : 0);
+      const twist = Math.sin(2*Math.PI*t + ph2) * Math.sin(3*Math.PI*t + ph3);
+
+      const tex = rnd[i] * rand(0.45, 0.95);
+      const multi = (Math.sin(2*Math.PI*t+ph1) + 0.7*Math.sin(3*Math.PI*t+ph2) + 0.35*Math.sin(5*Math.PI*t+ph3));
+      const hump = (0.8*humpA + 0.5*humpB);
+
+      const nDisp =
+        amp * (0.55*tex + 0.22*(1-big)*multi + 0.70*big*hump) * (0.55 + 0.55*env)
+        + (0.12*amp + 0.05*L*loop) * loop * win * twist;
+
+      const tDisp =
+        tangLoop * loop * win * w
+        + normLoop * loop * env * (0.85*humpA + 0.50*humpB + 0.35*twist);
+
+      let x = bx + nx*nDisp + tx*tDisp;
+      let y = by + ny*nDisp + ty*tDisp;
+
+      ctrl.push({x: clamp(x, M-12, W-(M-12)), y: clamp(y, M-12, H-(M-12))});
+    }
+    ctrl[0] = {x:x0, y:y0};
+    ctrl[count-1] = {x:x1, y:y1};
+
+    keepCtrlInView(ctrl, 44);
+    return ctrl;
+  }
+
+  // ===== UI 绑定 =====
+  const h = {
+    gen: document.getElementById('hGen'),
+    accept: document.getElementById('hAccept'),
+    discard: document.getElementById('hDiscard'),
+    reset: document.getElementById('hReset'),
+
+    modeNone: document.getElementById('hModeNone'),
+    modeClone: document.getElementById('hModeClone'),
+    modeMirror: document.getElementById('hModeMirror'),
+
+    sSpan: document.getElementById('hSpan'),
+    sAmp: document.getElementById('hAmp'),
+    sPts: document.getElementById('hPts'),
+    spanVal: document.getElementById('hSpanVal'),
+    ampVal: document.getElementById('hAmpVal'),
+    ptsVal: document.getElementById('hPtsVal'),
+
+    candG: document.getElementById('hCandidateGroup'),
+    candP: document.getElementById('hCandidatePath'),
+    candHit: document.getElementById('hCandidateHit'),
+    mainG: document.getElementById('hMainGroup'),
+    mainP: document.getElementById('hMainPath'),
+    mainHit: document.getElementById('hMainHit'),
+    cloneO: document.getElementById('hCloneOuter'),
+    cloneI: document.getElementById('hCloneInner'),
+    cloneP: document.getElementById('hClonePath'),
+    cloneHit: document.getElementById('hCloneHit'),
+
+    cloneMode:'none',
+    mainTx:0, mainTy:0,
+    cloneTx:DEFAULT_CLONE_DX, cloneTy:DEFAULT_CLONE_DY,
+    ctrl:[], samples:[], candCtrl:null
+  };
+
+  const v = {
+    gen: document.getElementById('vGen'),
+    accept: document.getElementById('vAccept'),
+    discard: document.getElementById('vDiscard'),
+    reset: document.getElementById('vReset'),
+
+    modeNone: document.getElementById('vModeNone'),
+    modeClone: document.getElementById('vModeClone'),
+    modeMirror: document.getElementById('vModeMirror'),
+
+    sLen: document.getElementById('vLen'),
+    sTilt: document.getElementById('vTilt'),
+    sAmp: document.getElementById('vAmp'),
+    sPts: document.getElementById('vPts'),
+    lenVal: document.getElementById('vLenVal'),
+    tiltVal: document.getElementById('vTiltVal'),
+    ampVal: document.getElementById('vAmpVal'),
+    ptsVal: document.getElementById('vPtsVal'),
+
+    candG: document.getElementById('vCandidateGroup'),
+    candP: document.getElementById('vCandidatePath'),
+    candHit: document.getElementById('vCandidateHit'),
+    mainG: document.getElementById('vMainGroup'),
+    mainP: document.getElementById('vMainPath'),
+    mainHit: document.getElementById('vMainHit'),
+    cloneO: document.getElementById('vCloneOuter'),
+    cloneI: document.getElementById('vCloneInner'),
+    cloneP: document.getElementById('vClonePath'),
+    cloneHit: document.getElementById('vCloneHit'),
+
+    cloneMode:'none',
+    mainTx:0, mainTy:0,
+    cloneTx:DEFAULT_CLONE_DX, cloneTy:DEFAULT_CLONE_DY,
+
+    candTx:0, candTy:0,
+    ctrl:[], samples:[], candCtrl:null,
+
+    tiltLocked: 0
+  };
+
+  function updateSliderVals(){
+    h.spanVal.textContent=h.sSpan.value;
+    h.ampVal.textContent=h.sAmp.value;
+    h.ptsVal.textContent=h.sPts.value;
+
+    v.lenVal.textContent=v.sLen.value;
+    v.tiltVal.textContent=v.sTilt.value + "°";
+    v.ampVal.textContent=v.sAmp.value;
+    v.ptsVal.textContent=v.sPts.value;
+  }
+  ['input','change'].forEach(ev=>{
+    [h.sSpan,h.sAmp,h.sPts, v.sLen,v.sTilt,v.sAmp,v.sPts].forEach(el=>el.addEventListener(ev, updateSliderVals));
+  });
+
+  function setGroupTransform(g, tx, ty){
+    g.setAttribute('transform', `translate(${tx.toFixed(2)}, ${ty.toFixed(2)})`);
+  }
+
+  function rebuildCurve(state){
+    state.samples = sampleCatmullRom(state.ctrl, 26);
+    const d = polyToPath(state.samples);
+    state.mainP.setAttribute('d', d);
+    state.mainHit.setAttribute('d', d);
+    state.cloneP.setAttribute('d', d);
+    state.cloneHit.setAttribute('d', d);
+  }
+
+  function showCandidate(state, ctrl){
+    state.candCtrl = ctrl;
+    const s = sampleCatmullRom(ctrl, 22);
+    const d = polyToPath(s);
+    state.candP.setAttribute('d', d);
+    state.candHit.setAttribute('d', d);
+    state.candG.setAttribute('visibility','visible');
+  }
+  function clearCandidate(state){
+    state.candCtrl=null;
+    state.candG.setAttribute('visibility','hidden');
+    if(state===h){ h.accept.disabled=true; h.discard.disabled=true; }
+    if(state===v){ v.accept.disabled=true; v.discard.disabled=true; }
+  }
+
+  function getHorizontalEndpointsWorld(){
+    const left = h.ctrl[0];
+    const right = h.ctrl[h.ctrl.length-1];
+    return {
+      left:  { x: left.x  + h.mainTx, y: left.y  + h.mainTy },
+      right: { x: right.x + h.mainTx, y: right.y + h.mainTy }
+    };
+  }
+  function getVerticalBottomWorld(){
+    const b = v.ctrl[v.ctrl.length-1];
+    return { x: b.x + v.mainTx, y: b.y + v.mainTy };
+  }
+
+  function alignVerticalMainTopToHorizontalLeft(){
+    const ends = getHorizontalEndpointsWorld();
+    const top = v.ctrl[0];
+    v.mainTx = ends.left.x - top.x;
+    v.mainTy = ends.left.y - top.y;
+  }
+  function alignVerticalCloneTopToHorizontalRight(){
+    const ends = getHorizontalEndpointsWorld();
+    const s = { x: ends.right.x, y: ends.right.y };
+
+    if(v.cloneMode==='mirror'){
+      if(v.modeMirror.disabled) return;
+      const bottom = v.ctrl[v.ctrl.length-1];
+      v.cloneTx = s.x - bottom.x;
+      v.cloneTy = s.y - (H - bottom.y);
+    }else{
+      const top = v.ctrl[0];
+      v.cloneTx = s.x - top.x;
+      v.cloneTy = s.y - top.y;
+    }
+  }
+  function snapHorizontalCloneLeftToVerticalBottom(){
+    if(h.cloneMode==='none') return;
+    const target = getVerticalBottomWorld();
+
+    if(h.cloneMode==='mirror'){
+      const right = h.ctrl[h.ctrl.length-1];
+      const xPrime = W - right.x;
+      const yPrime = right.y;
+      h.cloneTx = target.x - xPrime;
+      h.cloneTy = target.y - yPrime;
+    }else{
+      const left = h.ctrl[0];
+      h.cloneTx = target.x - left.x;
+      h.cloneTy = target.y - left.y;
+    }
+  }
+
+  function updateVerticalMirrorAvailability(){
+    const ok = (Math.round(v.tiltLocked)===0);
+    v.modeMirror.disabled = !ok;
+    if(!ok && v.cloneMode==='mirror'){
+      v.cloneMode='none';
+      v.modeNone.classList.add('active');
+      v.modeClone.classList.remove('active');
+      v.modeMirror.classList.remove('active');
+    }
+  }
+
+  function applyCloneModeVisual(){
+    if(h.cloneMode==='mirror') h.cloneI.setAttribute('transform', `translate(${W},0) scale(-1,1)`);
+    else h.cloneI.removeAttribute('transform');
+
+    updateVerticalMirrorAvailability();
+    if(v.cloneMode==='mirror' && !v.modeMirror.disabled){
+      v.cloneI.setAttribute('transform', `translate(0,${H}) scale(1,-1)`);
+    }else{
+      v.cloneI.removeAttribute('transform');
+    }
+
+    h.cloneO.setAttribute('visibility', h.cloneMode==='none' ? 'hidden' : 'visible');
+    v.cloneO.setAttribute('visibility', (v.cloneMode==='none' || (v.cloneMode==='mirror' && v.modeMirror.disabled)) ? 'hidden' : 'visible');
+  }
+
+  function applyTransformsVisual(){
+    setGroupTransform(h.mainG, h.mainTx, h.mainTy);
+    setGroupTransform(h.candG, h.mainTx, h.mainTy);
+    setGroupTransform(h.cloneO, h.cloneTx, h.cloneTy);
+
+    setGroupTransform(v.mainG, v.mainTx, v.mainTy);
+    setGroupTransform(v.candG, v.candTx, v.candTy);
+    setGroupTransform(v.cloneO, v.cloneTx, v.cloneTy);
+  }
+
+  // ===== 拖动（作画时禁止移动曲线）=====
+  function attachDrag(state, group, which){
+    let active=false;
+    let pid=null;
+    let start={x:0,y:0};
+    let startT={x:0,y:0};
+
+    group.addEventListener('pointerdown', (e)=>{
+      if(appMode!=='edit') return;
+      if(draw.tool!=='off') return;
+      const t=e.target;
+      if(!(t && (t.classList?.contains('hitStroke') || t.closest?.('.draggable')))) return;
+
+      active=true;
+      pid=e.pointerId;
+      e.preventDefault();
+
+      pushHistory();
+
+      const p = screenToLocalOnElement(e.clientX, e.clientY, world);
+      start=p;
+
+      if(which==='main') startT={x:state.mainTx, y:state.mainTy};
+      else startT={x:state.cloneTx, y:state.cloneTy};
+
+      group.classList.add('dragging');
+      group.setPointerCapture?.(e.pointerId);
+    });
+
+    window.addEventListener('pointermove', (e)=>{
+      if(!active || e.pointerId!==pid) return;
+      const p = screenToLocalOnElement(e.clientX, e.clientY, world);
+      const dx = p.x - start.x;
+      const dy = p.y - start.y;
+
+      if(which==='main'){ state.mainTx = startT.x + dx; state.mainTy = startT.y + dy; }
+      else{ state.cloneTx = startT.x + dx; state.cloneTy = startT.y + dy; }
+
+      applyTransformsVisual();
+    });
+
+    const end = (e)=>{
+      if(!active || e.pointerId!==pid) return;
+      active=false; pid=null;
+      group.classList.remove('dragging');
+      group.releasePointerCapture?.(e.pointerId);
+    };
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
+  attachDrag(h, h.mainG, 'main');
+  attachDrag(h, h.cloneO, 'clone');
+  attachDrag(v, v.mainG, 'main');
+  attachDrag(v, v.cloneO, 'clone');
+
+  function setCloneMode(state, mode, btnNone, btnClone, btnMirror){
+    if(appMode!=='edit') return;
+
+    if(state===v){
+      updateVerticalMirrorAvailability();
+      if(mode==='mirror' && btnMirror.disabled) return;
+    }
+
+    state.cloneMode = mode;
+    btnNone.classList.toggle('active', mode==='none');
+    btnClone.classList.toggle('active', mode==='clone');
+    btnMirror.classList.toggle('active', mode==='mirror');
+
+    pushHistory();
+
+    if(state===v && mode!=='none'){
+      alignVerticalCloneTopToHorizontalRight();
+    }
+    if(state===h && mode!=='none'){
+      snapHorizontalCloneLeftToVerticalBottom();
+    }
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+  }
+
+  h.modeNone.addEventListener('click', ()=>setCloneMode(h,'none',h.modeNone,h.modeClone,h.modeMirror));
+  h.modeClone.addEventListener('click', ()=>setCloneMode(h,'clone',h.modeNone,h.modeClone,h.modeMirror));
+  h.modeMirror.addEventListener('click', ()=>setCloneMode(h,'mirror',h.modeNone,h.modeClone,h.modeMirror));
+
+  v.modeNone.addEventListener('click', ()=>setCloneMode(v,'none',v.modeNone,v.modeClone,v.modeMirror));
+  v.modeClone.addEventListener('click', ()=>setCloneMode(v,'clone',v.modeNone,v.modeClone,v.modeMirror));
+  v.modeMirror.addEventListener('click', ()=>setCloneMode(v,'mirror',v.modeNone,v.modeClone,v.modeMirror));
+
+  // ===== 候选生成 / 采用 =====
+  function resetHorizontal(){
+    clearCandidate(h);
+    h.cloneMode='none';
+    h.modeNone.classList.add('active'); h.modeClone.classList.remove('active'); h.modeMirror.classList.remove('active');
+
+    h.ctrl = generateSafeCtrl(generateHorizontalCtrl, {
+      span:+h.sSpan.value, amp:+h.sAmp.value, pts:parseInt(h.sPts.value,10),
+      big:H_BIG, loop:H_LOOP
+    });
+    keepCtrlInView(h.ctrl, 44);
+    rebuildCurve(h);
+
+    h.mainTx=0; h.mainTy=0;
+    h.cloneTx=DEFAULT_CLONE_DX; h.cloneTy=DEFAULT_CLONE_DY;
+
+    alignVerticalMainTopToHorizontalLeft();
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+  }
+
+  function resetVertical(){
+    clearCandidate(v);
+    v.cloneMode='none';
+    v.modeNone.classList.add('active'); v.modeClone.classList.remove('active'); v.modeMirror.classList.remove('active');
+
+    v.ctrl = generateSafeCtrl(generateVerticalCtrl, {
+      len:+v.sLen.value, tiltDeg:+v.sTilt.value, amp:+v.sAmp.value, pts:parseInt(v.sPts.value,10),
+      big:V_BIG, loop:V_LOOP
+    });
+    keepCtrlInView(v.ctrl, 44);
+    rebuildCurve(v);
+
+    v.mainTx=0; v.mainTy=0;
+    v.cloneTx=DEFAULT_CLONE_DX; v.cloneTy=DEFAULT_CLONE_DY;
+
+    v.tiltLocked = parseFloat(v.sTilt.value)||0;
+    updateVerticalMirrorAvailability();
+
+    alignVerticalMainTopToHorizontalLeft();
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+  }
+
+  h.reset.addEventListener('click', ()=>{ if(appMode!=='edit') return; pushHistory(); resetHorizontal(); });
+  v.reset.addEventListener('click', ()=>{ if(appMode!=='edit') return; pushHistory(); resetVertical(); });
+
+  h.gen.addEventListener('click', ()=>{
+    if(appMode!=='edit') return;
+    pushHistory();
+    const ctrl = generateSafeCtrl(generateHorizontalCtrl, {
+      span:+h.sSpan.value, amp:+h.sAmp.value, pts:parseInt(h.sPts.value,10),
+      big:H_BIG, loop:H_LOOP
+    });
+    keepCtrlInView(ctrl, 44);
+    showCandidate(h, ctrl);
+    h.accept.disabled=false; h.discard.disabled=false;
+  });
+
+  h.accept.addEventListener('click', ()=>{
+    if(appMode!=='edit' || !h.candCtrl) return;
+    pushHistory();
+    h.ctrl=h.candCtrl;
+    keepCtrlInView(h.ctrl, 44);
+    rebuildCurve(h);
+    clearCandidate(h);
+
+    alignVerticalMainTopToHorizontalLeft();
+    applyTransformsVisual();
+  });
+
+  h.discard.addEventListener('click', ()=>{
+    if(appMode!=='edit' || !h.candCtrl) return;
+    pushHistory();
+    clearCandidate(h);
+  });
+
+  v.gen.addEventListener('click', ()=>{
+    if(appMode!=='edit') return;
+
+    // 竖直生成候选时：如果有克隆，先改回无克隆
+    pushHistory();
+    if(v.cloneMode !== 'none'){
+      v.cloneMode='none';
+      v.modeNone.classList.add('active');
+      v.modeClone.classList.remove('active');
+      v.modeMirror.classList.remove('active');
+      applyCloneModeVisual();
+      applyTransformsVisual();
+    }
+
+    const ctrl = generateSafeCtrl(generateVerticalCtrl, {
+      len:+v.sLen.value, tiltDeg:+v.sTilt.value, amp:+v.sAmp.value, pts:parseInt(v.sPts.value,10),
+      big:V_BIG, loop:V_LOOP
+    });
+    keepCtrlInView(ctrl, 44);
+    showCandidate(v, ctrl);
+
+    const ends = getHorizontalEndpointsWorld();
+    const top = ctrl[0];
+    v.candTx = ends.left.x - top.x;
+    v.candTy = ends.left.y - top.y;
+
+    v.accept.disabled=false; v.discard.disabled=false;
+    applyTransformsVisual();
+  });
+
+  v.accept.addEventListener('click', ()=>{
+    if(appMode!=='edit' || !v.candCtrl) return;
+    pushHistory();
+
+    v.ctrl=v.candCtrl;
+    keepCtrlInView(v.ctrl, 44);
+    rebuildCurve(v);
+    clearCandidate(v);
+
+    v.tiltLocked = parseFloat(v.sTilt.value)||0;
+    updateVerticalMirrorAvailability();
+
+    v.mainTx = v.candTx;
+    v.mainTy = v.candTy;
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+  });
+
+  v.discard.addEventListener('click', ()=>{
+    if(appMode!=='edit' || !v.candCtrl) return;
+    pushHistory();
+    clearCandidate(v);
+  });
+
+  // ===== 作画 =====
+  const drawToolPen=document.getElementById('drawToolPen');
+  const drawToolEraser=document.getElementById('drawToolEraser');
+  const drawToolOff=document.getElementById('drawToolOff');
+  const drawColor=document.getElementById('drawColor');
+  const penSize=document.getElementById('penSize');
+  const penSizeVal=document.getElementById('penSizeVal');
+  const eraseSize=document.getElementById('eraseSize');
+  const eraseSizeVal=document.getElementById('eraseSizeVal');
+
+  const draw = {
+    tool:'off',
+    color:'#111111',
+    penSize:5,
+    eraseSize:26,
+    strokes:[]
+  };
+
+  function ptsToD(pts){
+    if(!pts.length) return "M 0 0";
+    let d=`M ${pts[0].x.toFixed(2)} ${pts[0].y.toFixed(2)}`;
+    for(let i=1;i<pts.length;i++){
+      d += ` L ${pts[i].x.toFixed(2)} ${pts[i].y.toFixed(2)}`;
+    }
+    return d;
+  }
+  function renderDrawLayer(){
+    drawLayer.innerHTML="";
+    for(const s of draw.strokes){
+      const p=document.createElementNS("http://www.w3.org/2000/svg",'path');
+      p.setAttribute('class','drawStroke');
+      p.setAttribute('d', ptsToD(s.pts));
+      p.setAttribute('stroke', s.color);
+      p.setAttribute('stroke-width', String(s.w));
+      p.setAttribute('opacity', '0.95');
+      drawLayer.appendChild(p);
+    }
+  }
+  function dist2(a,b){
+    const dx=a.x-b.x, dy=a.y-b.y;
+    return dx*dx+dy*dy;
+  }
+  function eraseDrawAt(localWorld, radius){
+    const r2=radius*radius;
+    let changed=false;
+    for(let i=draw.strokes.length-1;i>=0;i--){
+      const s=draw.strokes[i];
+      let hit=false;
+      for(let k=0;k<s.pts.length;k+=2){
+        if(dist2(s.pts[k], localWorld) <= r2){ hit=true; break; }
+      }
+      if(hit){
+        draw.strokes.splice(i,1);
+        changed=true;
+      }
+    }
+    if(changed) renderDrawLayer();
+  }
+
+  function setDrawTool(t, withHistory=true){
+    if(appMode!=='edit') return;
+    draw.tool=t;
+    drawToolPen.classList.toggle('active', t==='pen');
+    drawToolEraser.classList.toggle('active', t==='eraser');
+    drawToolOff.classList.toggle('active', t==='off');
+    if(withHistory) pushHistory();
+  }
+  drawToolPen.addEventListener('click', ()=>setDrawTool('pen'));
+  drawToolEraser.addEventListener('click', ()=>setDrawTool('eraser'));
+  drawToolOff.addEventListener('click', ()=>setDrawTool('off'));
+  drawColor.addEventListener('input', ()=>{ draw.color=drawColor.value; });
+  penSize.addEventListener('input', ()=>{ draw.penSize=parseInt(penSize.value,10)||5; penSizeVal.textContent=penSize.value; });
+  eraseSize.addEventListener('input', ()=>{ draw.eraseSize=parseInt(eraseSize.value,10)||26; eraseSizeVal.textContent=eraseSize.value; });
+
+  let drawingActive=false;
+  let drawingPointerId=null;
+  let currentStroke=null;
+
+  function shouldStartDrawing(){
+    return (appMode==='edit' && draw.tool!=='off');
+  }
+
+  svg.addEventListener('pointerdown', (e)=>{
+    if(!shouldStartDrawing()) return;
+
+    drawingActive=true;
+    drawingPointerId=e.pointerId;
+    svg.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+
+    pushHistory();
+
+    const localWorld = screenToLocalOnElement(e.clientX, e.clientY, world);
+
+    if(draw.tool==='pen'){
+      currentStroke = { pts:[localWorld], w: draw.penSize, color: draw.color };
+      draw.strokes.push(currentStroke);
+      renderDrawLayer();
+    }else if(draw.tool==='eraser'){
+      eraseDrawAt(localWorld, draw.eraseSize);
+    }
+  });
+
+  svg.addEventListener('pointermove', (e)=>{
+    if(!drawingActive || drawingPointerId!==e.pointerId) return;
+    const localWorld = screenToLocalOnElement(e.clientX, e.clientY, world);
+
+    if(draw.tool==='pen'){
+      if(!currentStroke) return;
+      const last=currentStroke.pts[currentStroke.pts.length-1];
+      if(dist2(last, localWorld) < 2.2) return;
+      currentStroke.pts.push(localWorld);
+      renderDrawLayer();
+    }else if(draw.tool==='eraser'){
+      eraseDrawAt(localWorld, draw.eraseSize);
+    }
+  });
+
+  function endDrawing(e){
+    if(!drawingActive || drawingPointerId!==e.pointerId) return;
+    drawingActive=false;
+    drawingPointerId=null;
+    currentStroke=null;
+    svg.releasePointerCapture?.(e.pointerId);
+  }
+  svg.addEventListener('pointerup', endDrawing);
+  svg.addEventListener('pointercancel', endDrawing);
+
+  // ===== 结束作画后的克隆场景 =====
+  const palette = ['#111111','#1f6feb','#ff4d4f','#17b34a','#a855f7','#f59e0b','#06b6d4','#ef4444'];
+  let motifTemplate = null;
+  let motifCenter = {cx:W/2, cy:H/2};
+  let motifBBox = {x:0,y:0,width:0,height:0};
+
+  const MOTIF_SCALE = 2/5;
+
+  let clones = [];
+  let selectedId = null;
+
+  let baseOffset = {x:0, y:0};
+  let baseDrag = {active:false, pid:null, start:{x:0,y:0}, base:{x:0,y:0}};
+
+  function stripIds(node){
+    if(node.nodeType===1){
+      node.removeAttribute('id');
+      for(const ch of node.children) stripIds(ch);
+    }
+  }
+  function removeCandidates(node){
+    node.querySelectorAll('[class*="candidate"]').forEach(el=>el.remove());
+  }
+  function removeHitStrokes(node){
+    node.querySelectorAll('.hitStroke').forEach(el=>el.remove()); // ✅ 终稿里移除命中线，避免“看着更粗”
+  }
+  function setAllStrokeImportant(node, color){
+    node.querySelectorAll('path').forEach(p=>{
+      p.style.setProperty('stroke', color, 'important');
+      p.style.setProperty('fill', 'none', 'important');
+      p.style.setProperty('opacity', '1', 'important');
+      p.style.removeProperty('stroke-dasharray');
+      p.removeAttribute('stroke-dasharray');
+    });
+  }
+  function makeHitRect(bbox){
+    const r = document.createElementNS(SVG_NS,'rect');
+    r.setAttribute('x', bbox.x.toFixed(2));
+    r.setAttribute('y', bbox.y.toFixed(2));
+    r.setAttribute('width', bbox.width.toFixed(2));
+    r.setAttribute('height', bbox.height.toFixed(2));
+    r.setAttribute('fill', 'transparent');
+    r.setAttribute('pointer-events', 'all');
+    return r;
+  }
+
+  function setCloneRotUI(deg){
+    const d = clamp(deg, -180, 180);
+    cloneRot.value = String(Math.round(d));
+    cloneRotNum.value = String(Math.round(d));
+    cloneRotVal.textContent = `${Math.round(d)}°`;
+  }
+
+  function applyBaseOuter(){
+    baseOuter.setAttribute('transform', `translate(${baseOffset.x.toFixed(2)} ${baseOffset.y.toFixed(2)})`);
+  }
+
+  function applyInnerTransform(innerGroup, deg, mirrorX, mirrorY, scale){
+    const sx = (mirrorX ? -scale : scale);
+    const sy = (mirrorY ? -scale : scale);
+    innerGroup.setAttribute(
+      'transform',
+      `translate(${motifCenter.cx.toFixed(2)} ${motifCenter.cy.toFixed(2)}) rotate(${deg.toFixed(2)}) scale(${sx.toFixed(5)} ${sy.toFixed(5)}) translate(${-motifCenter.cx.toFixed(2)} ${-motifCenter.cy.toFixed(2)})`
+    );
+  }
+
+  function buildMotifFromEdit(){
+    baseInner.innerHTML='';
+    clonesLayer.innerHTML='';
+    motifTemplate=null;
+
+    const cloned = world.cloneNode(true);
+    removeCandidates(cloned);
+    stripIds(cloned);
+    removeHitStrokes(cloned); // ✅ 必须：终稿不保留 hitStroke
+
+    setAllStrokeImportant(cloned, '#111111');
+    cloned.querySelectorAll('.drawStroke').forEach(p=>{
+      p.style.setProperty('stroke', '#111111', 'important');
+    });
+
+    motifTemplate = cloned;
+
+    const artWrap = document.createElementNS(SVG_NS,'g');
+    artWrap.appendChild(motifTemplate);
+    baseInner.appendChild(artWrap);
+
+    const b = artWrap.getBBox();
+    motifBBox = { x:b.x, y:b.y, width:b.width, height:b.height };
+
+    const hitRect = makeHitRect(motifBBox);
+    baseInner.insertBefore(hitRect, baseInner.firstChild);
+
+    motifCenter = { cx: motifBBox.x + motifBBox.width/2, cy: motifBBox.y + motifBBox.height/2 };
+
+    baseOffset = { x: (W/2 - motifCenter.cx), y: (H/2 - motifCenter.cy) };
+    applyBaseOuter();
+
+    applyInnerTransform(baseInner, 0, false, false, MOTIF_SCALE);
+  }
+
+  function newCloneData(mirrorX=false, mirrorY=false){
+    const idx = clones.length % (palette.length-1);
+    const color = palette[1 + idx];
+
+    const ring = 190 + (clones.length%6)*18;
+    const ang = (clones.length * 42) * Math.PI/180;
+    const x = clamp(W/2 + ring*Math.cos(ang), 50, W-50);
+    const y = clamp(H/2 + ring*Math.sin(ang), 50, H-50);
+
+    return {
+      id: 'c' + Math.random().toString(36).slice(2,9),
+      x, y,
+      deg: 0,
+      mirrorX, mirrorY,
+      color
+    };
+  }
+
+  function cloneTranslate(c){
+    return { tx: (c.x - motifCenter.cx), ty: (c.y - motifCenter.cy) };
+  }
+
+  function renderClonesLayer(){
+    clonesLayer.innerHTML='';
+    for(const c of clones){
+      const outer=document.createElementNS(SVG_NS,'g');
+      outer.setAttribute('class','finalClone');
+      outer.setAttribute('data-id', c.id);
+
+      const t = cloneTranslate(c);
+      outer.setAttribute('transform', `translate(${t.tx.toFixed(2)} ${t.ty.toFixed(2)})`);
+
+      const inner=document.createElementNS(SVG_NS,'g');
+      inner.setAttribute('data-inner','1');
+
+      const hitRect = makeHitRect(motifBBox);
+      inner.appendChild(hitRect);
+
+      const art = motifTemplate.cloneNode(true);
+      setAllStrokeImportant(art, c.color);
+      art.querySelectorAll('.drawStroke').forEach(p=>{
+        p.style.setProperty('stroke', c.color, 'important');
+      });
+      inner.appendChild(art);
+
+      outer.appendChild(inner);
+      clonesLayer.appendChild(outer);
+
+      applyInnerTransform(inner, c.deg, c.mirrorX, c.mirrorY, MOTIF_SCALE);
+    }
+
+    bindCloneInteractions();
+  }
+
+  let cloneDrag = {active:false, id:null, pid:null, start:{x:0,y:0}, base:{x:0,y:0}};
+
+  function bindCloneInteractions(){
+    clonesLayer.querySelectorAll('.finalClone').forEach(g=>{
+      g.addEventListener('pointerdown', (e)=>{
+        if(appMode!=='final') return;
+        const id=g.getAttribute('data-id');
+        if(!id) return;
+
+        e.preventDefault(); e.stopPropagation();
+        selectClone(id);
+
+        pushHistory();
+        cloneDrag.active=true;
+        cloneDrag.id=id;
+        cloneDrag.pid=e.pointerId;
+
+        const p = screenToLocalOnElement(e.clientX, e.clientY, svg);
+        cloneDrag.start = p;
+
+        const c = clones.find(x=>x.id===id);
+        cloneDrag.base = {x:c.x, y:c.y};
+
+        g.setPointerCapture?.(e.pointerId);
+      });
+    });
+  }
+
+  baseOuter.addEventListener('pointerdown', (e)=>{
+    if(appMode!=='final') return;
+    if(e.target && e.target.closest && e.target.closest('.finalClone')) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    selectClone(null);
+
+    pushHistory();
+    baseDrag.active=true;
+    baseDrag.pid=e.pointerId;
+    baseDrag.start = screenToLocalOnElement(e.clientX, e.clientY, svg);
+    baseDrag.base = {x: baseOffset.x, y: baseOffset.y};
+
+    baseOuter.classList.add('dragging');
+    baseOuter.setPointerCapture?.(e.pointerId);
+  });
+
+  svg.addEventListener('pointermove', (e)=>{
+    if(appMode!=='final') return;
+
+    if(cloneDrag.active && cloneDrag.pid===e.pointerId){
+      const p = screenToLocalOnElement(e.clientX, e.clientY, svg);
+      const dx = p.x - cloneDrag.start.x;
+      const dy = p.y - cloneDrag.start.y;
+
+      const c = clones.find(x=>x.id===cloneDrag.id);
+      if(!c) return;
+      c.x = clamp(cloneDrag.base.x + dx, 20, W-20);
+      c.y = clamp(cloneDrag.base.y + dy, 20, H-20);
+
+      const g = clonesLayer.querySelector(`.finalClone[data-id="${c.id}"]`);
+      if(g){
+        const t = cloneTranslate(c);
+        g.setAttribute('transform', `translate(${t.tx.toFixed(2)} ${t.ty.toFixed(2)})`);
+      }
+      return;
+    }
+
+    if(baseDrag.active && baseDrag.pid===e.pointerId){
+      const p = screenToLocalOnElement(e.clientX, e.clientY, svg);
+      baseOffset.x = baseDrag.base.x + (p.x - baseDrag.start.x);
+      baseOffset.y = baseDrag.base.y + (p.y - baseDrag.start.y);
+      applyBaseOuter();
+      return;
+    }
+  });
+
+  function endAnyDrag(e){
+    if(appMode!=='final') return;
+
+    if(cloneDrag.active && cloneDrag.pid===e.pointerId){
+      cloneDrag.active=false; cloneDrag.id=null; cloneDrag.pid=null;
+    }
+
+    if(baseDrag.active && baseDrag.pid===e.pointerId){
+      baseDrag.active=false; baseDrag.pid=null;
+      baseOuter.classList.remove('dragging');
+      baseOuter.releasePointerCapture?.(e.pointerId);
+    }
+  }
+  svg.addEventListener('pointerup', endAnyDrag);
+  svg.addEventListener('pointercancel', endAnyDrag);
+
+  svg.addEventListener('pointerdown', (e)=>{
+    if(appMode!=='final') return;
+    const t=e.target;
+    if(t && t.closest && (t.closest('.finalClone') || t.closest('#baseOuter'))) return;
+    selectClone(null);
+  });
+
+  function selectClone(id){
+    selectedId = id;
+    if(selectedId){
+      const c = clones.find(x=>x.id===selectedId);
+      setCloneRotUI(c?.deg || 0);
+    }else{
+      setCloneRotUI(0);
+    }
+  }
+
+  function applySelectedRotation(deg){
+    if(appMode!=='final') return;
+    if(!selectedId) return;
+    const d = clamp(deg, -180, 180);
+
+    const c = clones.find(x=>x.id===selectedId);
+    if(!c) return;
+    c.deg = d;
+
+    const g = clonesLayer.querySelector(`.finalClone[data-id="${c.id}"] [data-inner="1"]`);
+    if(g) applyInnerTransform(g, c.deg, c.mirrorX, c.mirrorY, MOTIF_SCALE);
+  }
+
+  cloneRot.addEventListener('input', ()=>{
+    if(appMode!=='final' || !selectedId) return;
+    const deg = parseFloat(cloneRot.value)||0;
+    setCloneRotUI(deg);
+    applySelectedRotation(deg);
+  });
+  cloneRot.addEventListener('pointerdown', ()=>{ if(appMode==='final' && selectedId) pushHistory(); });
+  cloneRotNum.addEventListener('input', ()=>{
+    if(appMode!=='final' || !selectedId) return;
+    const deg = parseFloat(cloneRotNum.value)||0;
+    setCloneRotUI(deg);
+    applySelectedRotation(deg);
+  });
+  cloneRotNum.addEventListener('change', ()=>{ if(appMode==='final' && selectedId) pushHistory(); });
+
+  cloneBtn.addEventListener('click', ()=>{
+    if(appMode!=='final') return;
+    pushHistory();
+    const c = newCloneData(false,false);
+    clones.push(c);
+    renderClonesLayer();
+    selectClone(c.id);
+  });
+  lrCloneBtn.addEventListener('click', ()=>{
+    if(appMode!=='final') return;
+    pushHistory();
+    const c = newCloneData(true,false);
+    clones.push(c);
+    renderClonesLayer();
+    selectClone(c.id);
+  });
+  udCloneBtn.addEventListener('click', ()=>{
+    if(appMode!=='final') return;
+    pushHistory();
+    const c = newCloneData(false,true);
+    clones.push(c);
+    renderClonesLayer();
+    selectClone(c.id);
+  });
+  xyCloneBtn.addEventListener('click', ()=>{
+    if(appMode!=='final') return;
+    pushHistory();
+    const c = newCloneData(true,true);
+    clones.push(c);
+    renderClonesLayer();
+    selectClone(c.id);
+  });
+
+  // ===== 历史 =====
+  const undoStack=[], redoStack=[];
+  const MAX_HISTORY=60;
+  const deepCopy=o=>JSON.parse(JSON.stringify(o));
+
+  function snapshot(){
+    return {
+      appMode,
+      rotDeg,
+      finalLocked,  // ✅ 保存锁定状态
+      draw: { tool: draw.tool, color: draw.color, penSize: draw.penSize, eraseSize: draw.eraseSize, strokes: draw.strokes },
+      final: { clones, selectedId, baseOffset, motifBBox },
+
+      h:{ cloneMode:h.cloneMode, mainTx:h.mainTx, mainTy:h.mainTy, cloneTx:h.cloneTx, cloneTy:h.cloneTy, ctrl:h.ctrl, candCtrl:h.candCtrl },
+      v:{ cloneMode:v.cloneMode, mainTx:v.mainTx, mainTy:v.mainTy, cloneTx:v.cloneTx, cloneTy:v.cloneTy, ctrl:v.ctrl, candCtrl:v.candCtrl, candTx:v.candTx, candTy:v.candTy, tiltLocked:v.tiltLocked }
+    };
+  }
+  function updateUndoRedoButtons(){
+    undoBtn.disabled = undoStack.length<=1;
+    redoBtn.disabled = redoStack.length===0;
+  }
+  function pushHistory(){
+    undoStack.push(deepCopy(snapshot()));
+    if(undoStack.length>MAX_HISTORY) undoStack.shift();
+    redoStack.length=0;
+    updateUndoRedoButtons();
+  }
+  function resetHistoryToCurrent(){
+    undoStack.length=0; redoStack.length=0;
+    undoStack.push(deepCopy(snapshot()));
+    updateUndoRedoButtons();
+  }
+
+  function restoreFrom(state){
+    // ✅ 一旦进入终稿（finalLocked=true），任何 restore 都不允许回 edit
+    if(state.finalLocked && state.appMode!=='final') return;
+
+    appMode = state.appMode || 'edit';
+    rotDeg = state.rotDeg ?? 0;
+    finalLocked = !!state.finalLocked;
+    applyRotationVisual();
+
+    draw.tool = state.draw?.tool || 'off';
+    draw.color = state.draw?.color || '#111111';
+    draw.penSize = state.draw?.penSize ?? 5;
+    draw.eraseSize = state.draw?.eraseSize ?? 26;
+    draw.strokes = state.draw?.strokes || [];
+
+    drawColor.value = draw.color;
+    penSize.value = String(draw.penSize);
+    eraseSize.value = String(draw.eraseSize);
+    penSizeVal.textContent = String(draw.penSize);
+    eraseSizeVal.textContent = String(draw.eraseSize);
+
+    drawToolPen.classList.toggle('active', draw.tool==='pen');
+    drawToolEraser.classList.toggle('active', draw.tool==='eraser');
+    drawToolOff.classList.toggle('active', draw.tool==='off');
+    renderDrawLayer();
+
+    h.cloneMode = state.h.cloneMode || 'none';
+    h.mainTx = state.h.mainTx ?? 0;
+    h.mainTy = state.h.mainTy ?? 0;
+    h.cloneTx = state.h.cloneTx ?? DEFAULT_CLONE_DX;
+    h.cloneTy = state.h.cloneTy ?? DEFAULT_CLONE_DY;
+    h.ctrl = state.h.ctrl || [];
+    h.candCtrl = state.h.candCtrl || null;
+
+    h.modeNone.classList.toggle('active', h.cloneMode==='none');
+    h.modeClone.classList.toggle('active', h.cloneMode==='clone');
+    h.modeMirror.classList.toggle('active', h.cloneMode==='mirror');
+
+    if(h.ctrl.length) rebuildCurve(h);
+    if(h.candCtrl){
+      showCandidate(h, h.candCtrl);
+      h.accept.disabled=false; h.discard.disabled=false;
+    }else{
+      clearCandidate(h);
+    }
+
+    v.cloneMode = state.v.cloneMode || 'none';
+    v.mainTx = state.v.mainTx ?? 0;
+    v.mainTy = state.v.mainTy ?? 0;
+    v.cloneTx = state.v.cloneTx ?? DEFAULT_CLONE_DX;
+    v.cloneTy = state.v.cloneTy ?? DEFAULT_CLONE_DY;
+    v.ctrl = state.v.ctrl || [];
+    v.candCtrl = state.v.candCtrl || null;
+    v.candTx = state.v.candTx ?? v.mainTx;
+    v.candTy = state.v.candTy ?? v.mainTy;
+    v.tiltLocked = state.v.tiltLocked ?? 0;
+
+    v.modeNone.classList.toggle('active', v.cloneMode==='none');
+    v.modeClone.classList.toggle('active', v.cloneMode==='clone');
+    v.modeMirror.classList.toggle('active', v.cloneMode==='mirror');
+
+    updateVerticalMirrorAvailability();
+
+    if(v.ctrl.length) rebuildCurve(v);
+    if(v.candCtrl){
+      showCandidate(v, v.candCtrl);
+      v.accept.disabled=false; v.discard.disabled=false;
+    }else{
+      clearCandidate(v);
+    }
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+
+    if(appMode==='final'){
+      document.body.classList.add('final');
+      editWrap.setAttribute('display','none');
+      editWrap.setAttribute('visibility','hidden');
+
+      finalScene.setAttribute('display','inline');
+      finalScene.setAttribute('visibility','visible');
+
+      motifBBox = state.final?.motifBBox || motifBBox;
+      buildMotifFromEdit();
+
+      baseOffset = state.final?.baseOffset || baseOffset;
+      applyBaseOuter();
+
+      clones = state.final?.clones || [];
+      selectedId = state.final?.selectedId || null;
+      renderClonesLayer();
+      selectClone(selectedId);
+    }else{
+      // 如果 finalLocked=true，这里永远不会被触发（已在函数开头挡住）
+      document.body.classList.remove('final');
+
+      finalScene.setAttribute('visibility','hidden');
+      finalScene.setAttribute('display','none');
+      baseInner.innerHTML='';
+      clonesLayer.innerHTML='';
+
+      editWrap.removeAttribute('display');
+      editWrap.setAttribute('visibility','visible');
+
+      clones = [];
+      selectedId = null;
+    }
+
+    updateUndoRedoButtons();
+  }
+
+  undoBtn.addEventListener('click', ()=>{
+    if(undoStack.length<=1) return;
+    redoStack.push(undoStack.pop());
+    restoreFrom(undoStack[undoStack.length-1]);
+  });
+  redoBtn.addEventListener('click', ()=>{
+    if(!redoStack.length) return;
+    const st=redoStack.pop();
+    undoStack.push(st);
+    restoreFrom(st);
+  });
+
+  function enterFinalMode(){
+    if(appMode==='final') return;
+
+    // ✅ 进入终稿即锁死
+    finalLocked = true;
+    appMode='final';
+    document.body.classList.add('final');
+
+    editWrap.setAttribute('display','none');
+    editWrap.setAttribute('visibility','hidden');
+
+    finalScene.setAttribute('display','inline');
+    finalScene.setAttribute('visibility','visible');
+
+    buildMotifFromEdit();
+
+    clones = [];
+    selectedId=null;
+    renderClonesLayer();
+    selectClone(null);
+
+    // ✅ 清空回编辑的历史：撤销绝不可能回到前面的画面
+    resetHistoryToCurrent();
+  }
+  finishBtn.addEventListener('click', ()=>{ if(appMode!=='edit') return; enterFinalMode(); });
+
+  // ===== 初始化 =====
+  function init(){
+    finalLocked=false;
+    appMode='edit';
+
+    h.ctrl = generateSafeCtrl(generateHorizontalCtrl, {
+      span:+h.sSpan.value, amp:+h.sAmp.value, pts:parseInt(h.sPts.value,10),
+      big:H_BIG, loop:H_LOOP
+    });
+    keepCtrlInView(h.ctrl, 44);
+    rebuildCurve(h);
+    h.mainTx=0; h.mainTy=0;
+    h.cloneTx=DEFAULT_CLONE_DX; h.cloneTy=DEFAULT_CLONE_DY;
+
+    v.ctrl = generateSafeCtrl(generateVerticalCtrl, {
+      len:+v.sLen.value, tiltDeg:+v.sTilt.value, amp:+v.sAmp.value, pts:parseInt(v.sPts.value,10),
+      big:V_BIG, loop:V_LOOP
+    });
+    keepCtrlInView(v.ctrl, 44);
+    rebuildCurve(v);
+    v.mainTx=0; v.mainTy=0;
+    v.cloneTx=DEFAULT_CLONE_DX; v.cloneTy=DEFAULT_CLONE_DY;
+    v.tiltLocked = parseFloat(v.sTilt.value)||0;
+    updateVerticalMirrorAvailability();
+
+    alignVerticalMainTopToHorizontalLeft();
+
+    applyCloneModeVisual();
+    applyTransformsVisual();
+
+    draw.tool='off';
+    draw.color=drawColor.value;
+    draw.penSize=parseInt(penSize.value,10)||5;
+    draw.eraseSize=parseInt(eraseSize.value,10)||26;
+    renderDrawLayer();
+
+    updateSliderVals();
+
+    undoStack.length=0; redoStack.length=0;
+    undoStack.push(deepCopy(snapshot()));
+    updateUndoRedoButtons();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
